@@ -52,4 +52,4 @@ docker run --name aws_services_backend \
   -v $(pwd)/.env:/usr/src/app/.env \
   aws_services_backend
 
-docker logs aws_services_backend portback -f
+docker logs aws_services_backend -f
