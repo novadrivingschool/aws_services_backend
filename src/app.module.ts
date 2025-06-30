@@ -1,5 +1,4 @@
 import { Module } from '@nestjs/common';
-import { AppService } from './app.service';
 import { S3Module } from './s3/s3.module';
 import { S3Controller } from './s3/s3.controller';
 import { ConfigModule } from '@nestjs/config';
@@ -12,6 +11,6 @@ import { ConfigModule } from '@nestjs/config';
     }),
     S3Module],
   controllers: [S3Controller],
-  providers: [AppService],
+  providers: [],
 })
 export class AppModule { }
