@@ -3,6 +3,9 @@ import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { ConfigService } from '@nestjs/config';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { Response } from 'express';
+import { Stream } from 'stream';
+
 
 @Injectable()
 export class S3Service {
@@ -99,6 +102,33 @@ export class S3Service {
     } catch (error) {
       console.error('S3 Delete Error:', error);
       throw new InternalServerErrorException('Error deleting from S3');
+    }
+  }
+
+  async downloadFile(
+    folder: string,
+    filename: string,
+    res: Response,
+  ) {
+    const key = `${folder}/${filename}`;
+
+    const command = new GetObjectCommand({
+      Bucket: this.bucketName,
+      Key: key,
+    });
+
+    try {
+      const s3Response = await this.s3.send(command);
+
+      res.setHeader('Content-Type', s3Response.ContentType || 'application/octet-stream');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+      const stream = s3Response.Body as Stream;
+
+      stream.pipe(res);
+    } catch (error) {
+      console.error('❌ Error downloading file:', error);
+      throw new InternalServerErrorException('Failed to download file');
     }
   }
 }

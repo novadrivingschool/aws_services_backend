@@ -1,8 +1,10 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseInterceptors, UploadedFile, Query } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseInterceptors, UploadedFile, Query, Res } from '@nestjs/common';
 import { S3Service } from './s3.service';
 import { CreateS3Dto } from './dto/create-s3.dto';
 import { UpdateS3Dto } from './dto/update-s3.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { Response } from 'express';
+
 
 @Controller('s3')
 export class S3Controller {
@@ -31,5 +33,13 @@ export class S3Controller {
     return this.s3Service.getPublicUrl(folder, employeeNumber, filename);
   }
 
+  @Get('download')
+  async downloadFile(
+    @Res() res: Response,
+    @Query('folder') folder: string,
+    @Query('filename') filename: string,
+  ) {
+    return this.s3Service.downloadFile(folder, filename, res);
+  }
 
 }
