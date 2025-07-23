@@ -33,6 +33,14 @@ export class S3Controller {
     return this.s3Service.getPublicUrl(folder, employeeNumber, filename);
   }
 
+  @Get('file-url/no-employee')
+  getPublicUrl_noEmployeeNumber(
+    @Query('folder') folder: string,
+    @Query('filename') filename: string
+  ) {
+    return this.s3Service.getPublicUrl_noEmployeeNumber(folder, filename);
+  }
+
   @Get('download')
   async downloadFile(
     @Res() res: Response,

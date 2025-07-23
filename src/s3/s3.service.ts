@@ -88,6 +88,23 @@ export class S3Service {
     }
   }
 
+  async getPublicUrl_noEmployeeNumber(folder: string, filename: string) {
+    const key = `${folder}/${filename}`;
+
+    const command = new GetObjectCommand({
+      Bucket: this.bucketName,
+      Key: key,
+    });
+
+    try {
+      const url = await getSignedUrl(this.s3, command, { expiresIn: 60 * 5 }); // 5 minutos
+      return { success: true, url };
+    } catch (error) {
+      console.error('❌ Error generating signed URL:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
   async deleteFile(filename: string, employeeNumber: string) {
     const key = `Employees/${employeeNumber}/${filename}`;
 
@@ -110,7 +127,10 @@ export class S3Service {
     filename: string,
     res: Response,
   ) {
+    console.log("folder: ", folder);
+    folder = decodeURIComponent(folder);
     const key = `${folder}/${filename}`;
+    console.log("key: ", key);
 
     const command = new GetObjectCommand({
       Bucket: this.bucketName,
