@@ -71,6 +71,34 @@ export class S3Service {
     }
   }
 
+  async uploadFileGeneral(
+    buffer: Buffer,
+    filename: string,
+    mimetype: string,
+    folder: string
+  ) {
+    const key = `${folder}/${filename}`;
+
+    try {
+      await this.s3.send(
+        new PutObjectCommand({
+          Bucket: this.bucketName,
+          Key: key,
+          Body: buffer,
+          ContentType: mimetype,
+        })
+      );
+
+      return {
+        success: true,
+        message: `File uploaded to ${key}`
+      };
+    } catch (error) {
+      console.error('S3 upload error:', error);
+      throw new InternalServerErrorException('Failed to upload file');
+    }
+  }
+
   async getPublicUrl(folder: string, employeeNumber: string, filename: string) {
     const key = `${folder}/${employeeNumber}/${filename}`;
 

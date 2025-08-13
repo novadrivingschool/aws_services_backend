@@ -10,6 +10,23 @@ import { Response } from 'express';
 export class S3Controller {
   constructor(private readonly s3Service: S3Service) { }
 
+
+
+  @Post('upload/general')
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadFileGeneral(
+    @UploadedFile() file: Express.Multer.File,
+    @Query('folder') folder: string // ← Carpeta destino en S3
+  ) {
+    console.log("uploading file general...");
+    console.log("folder: ", folder);
+    const buffer = file.buffer;
+    const filename = file.originalname;
+    const mimetype = file.mimetype;
+
+    return this.s3Service.uploadFileGeneral(buffer, filename, mimetype, folder);
+  }
+
   @Post('upload')
   @UseInterceptors(FileInterceptor('file'))
   async uploadFile(
