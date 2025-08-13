@@ -32,6 +32,9 @@ export class S3Controller {
     @UploadedFile() file: Express.Multer.File,
     @Body('folder') folder: string, // ← ahora viene en el body
   ) {
+    console.log("uploading file general...");
+    console.log("folder: ", folder);
+    console.log("file: ", file)
     if (!file) throw new BadRequestException('File is required');
     if (!folder) throw new BadRequestException('folder is required');
 
