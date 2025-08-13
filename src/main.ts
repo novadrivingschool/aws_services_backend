@@ -1,59 +1,36 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import * as dotenv from 'dotenv';
-import * as bodyParser from 'body-parser'; // si aún usas body-parser para JSON/form
-dotenv.config();
-
-function parseAllowedOrigins(): string[] {
-  return (process.env.ALLOWED_ORIGINS || '')
-    .split(',')
-    .map(s => s.trim())
-    .filter(Boolean);
-}
+// (Opcional) si realmente necesitas subir límites de JSON/form:
+// import * as bodyParser from 'body-parser';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  const allowed = parseAllowedOrigins();
-  const isDev = process.env.NODE_ENV !== 'production';
+  // Si necesitas límites grandes para JSON/form (no archivos):
+  // app.use(bodyParser.json({ limit: '300mb' }));
+  // app.use(bodyParser.urlencoded({ limit: '300mb', extended: true }));
 
-  // (Opcional) si envías JSON grande (NO archivos), sube límites:
-  app.use(bodyParser.json({ limit: '300mb' }));
-  app.use(bodyParser.urlencoded({ limit: '300mb', extended: true }));
-
-  // Usa SOLO enableCors. No mezcles con middleware manual para evitar headers duplicados
+  // CORS: acepta cualquier origen, reflejado, con credenciales.
   app.enableCors({
-    origin: (origin, cb) => {
-      // permite herramientas sin Origin (curl/Postman)
-      if (!origin) return cb(null, true);
-      if (isDev) return cb(null, true);
-      if (allowed.includes(origin)) return cb(null, true);
-      return cb(new Error('Not allowed by CORS'));
-    },
-    credentials: true, // si usas cookies/autenticación
-    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
-    allowedHeaders: [
-      'Content-Type',
-      'Authorization',
-      'x-api-key',
-      // agrega aquí otros headers que envíes desde el browser
-    ],
-    exposedHeaders: ['ETag', 'Content-Length'],
+    origin: true,                // refleja el Origin entrante (permite todos)
+    credentials: true,           // permite cookies/autenticación
+    methods: ['GET','HEAD','PUT','PATCH','POST','DELETE','OPTIONS'],
+    allowedHeaders: ['Content-Type','Authorization','x-api-key','x-requested-with'],
+    exposedHeaders: ['ETag','Content-Length'],
     maxAge: 86400,
   });
 
-  // Responder rápido los preflight (algunos proxies no lo hacen)
+  // Responder rápido preflight
   app.use((req, res, next) => {
     if (req.method === 'OPTIONS') return res.sendStatus(204);
     next();
   });
 
-  // Asegura CORS incluso en errores (413, 4xx/5xx), para que el navegador muestre el error real
+  // Asegurar CORS también en errores (4xx/5xx), reflejando el Origin
   app.use((err, req, res, next) => {
     const origin = req.headers.origin as string | undefined;
-    const can = isDev || (origin && allowed.includes(origin));
-    if (can && !res.headersSent) {
-      res.setHeader('Access-Control-Allow-Origin', origin!);
+    if (origin && !res.headersSent) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
       res.setHeader('Access-Control-Allow-Credentials', 'true');
     }
