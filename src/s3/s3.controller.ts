@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseInterceptors, UploadedFile, Query, Res } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseInterceptors, UploadedFile, Query, Res, BadRequestException } from '@nestjs/common';
 import { S3Service } from './s3.service';
 import { CreateS3Dto } from './dto/create-s3.dto';
 import { UpdateS3Dto } from './dto/update-s3.dto';
@@ -12,7 +12,7 @@ export class S3Controller {
 
 
 
-  @Post('upload/general')
+  /* @Post('upload/general')
   @UseInterceptors(FileInterceptor('file'))
   async uploadFileGeneral(
     @UploadedFile() file: Express.Multer.File,
@@ -20,6 +20,21 @@ export class S3Controller {
   ) {
     console.log("uploading file general...");
     console.log("folder: ", folder);
+    const buffer = file.buffer;
+    const filename = file.originalname;
+    const mimetype = file.mimetype;
+
+    return this.s3Service.uploadFileGeneral(buffer, filename, mimetype, folder);
+  } */
+  @Post('upload/general')
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadFileGeneral(
+    @UploadedFile() file: Express.Multer.File,
+    @Body('folder') folder: string, // ← ahora viene en el body
+  ) {
+    if (!file) throw new BadRequestException('File is required');
+    if (!folder) throw new BadRequestException('folder is required');
+
     const buffer = file.buffer;
     const filename = file.originalname;
     const mimetype = file.mimetype;
