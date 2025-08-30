@@ -73,6 +73,9 @@ export class S3Controller {
     @Query('folder') folder: string,
     @Query('filename') filename: string
   ) {
+    console.log("file-url/no-employee/getting public url...");
+    console.log("folder: ", folder);
+    console.log("filename: ", filename);
     return this.s3Service.getPublicUrl_noEmployeeNumber(folder, filename);
   }
 

@@ -117,7 +117,13 @@ export class S3Service {
   }
 
   async getPublicUrl_noEmployeeNumber(folder: string, filename: string) {
+    console.log("getPublicUrl_noEmployeeNumber")
+    console.log("folder: ", folder);
+    console.log("filename: ", filename);
     const key = `${folder}/${filename}`;
+    console.log("key: ", key);
+    console.log("this.bucketName: ", this.bucketName);
+
 
     const command = new GetObjectCommand({
       Bucket: this.bucketName,
