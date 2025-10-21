@@ -11,35 +11,46 @@ import { Readable } from 'stream';
 
 @Injectable()
 export class S3MktService {
-  // ⚠️ solo bucket hardcodeado (como pediste)
-  private readonly BUCKET = 'nova-marketing';
+  // Bucket ahora viene de ENV (fallback a 'nova-marketing-dev')
+  private readonly BUCKET: string;
 
   private s3: S3Client;
   private region: string;
 
   constructor(private readonly config: ConfigService) {
-    // usa la MISMA región y credenciales de tu proyecto
     this.region = this.config.get<string>('REGION') || 'us-east-2';
+
+    // Lee el bucket de env: S3_MKT_BUCKET (fallback al que me diste)
+    this.BUCKET = this.config.get<string>('S3_MKT_BUCKET') || 'nova-marketing-dev';
+
     const accessKeyId = this.config.get<string>('ACCESS_KEY');
     const secretAccessKey = this.config.get<string>('SECRET_ACCESS_KEY');
 
     if (!this.region) {
       throw new Error('REGION is required in environment variables');
     }
+    if (!this.BUCKET) {
+      throw new Error('S3_MKT_BUCKET is required in environment variables');
+    }
 
-    // credenciales explícitas si están definidas (evita el CredentialsProviderError)
+    // credenciales explícitas si están definidas
     this.s3 = new S3Client({
       region: this.region,
       credentials:
         accessKeyId && secretAccessKey
           ? { accessKeyId, secretAccessKey }
-          : undefined, // si corres con role/perfil, el provider chain las toma
+          : undefined, // usa provider chain si tienes role/perfil
     });
   }
 
-  // URL pública estable (no firmada)
+  // Build de URL pública estable (no firmada), considerando us-east-1
   private publicUrlFromKey(key: string) {
-    return `https://${this.BUCKET}.s3.${this.region}.amazonaws.com/${key}`;
+    const encodedKey = encodeURI(key);
+    const base =
+      this.region === 'us-east-1'
+        ? `https://${this.BUCKET}.s3.amazonaws.com`
+        : `https://${this.BUCKET}.s3.${this.region}.amazonaws.com`;
+    return `${base}/${encodedKey}`;
   }
 
   // ====== subir archivo al bucket de marketing
@@ -57,18 +68,15 @@ export class S3MktService {
           Key: key,
           Body: buffer,
           ContentType: mimetype,
-          // Opcional: cache largo para assets de email
+          // Cache largo para assets de email
           CacheControl: 'public, max-age=31536000, immutable',
-          // Opcional si tu bucket policy no es pública:
-          // ACL: 'public-read',
+          // ACL: 'public-read', // según tu bucket policy
         }),
       );
       return { success: true, key, publicUrl: this.publicUrlFromKey(key) };
     } catch (e) {
       console.error('❌ S3Mkt upload error:', e);
-      throw new InternalServerErrorException(
-        'Failed to upload to marketing bucket',
-      );
+      throw new InternalServerErrorException('Failed to upload to marketing bucket');
     }
   }
 
@@ -107,9 +115,7 @@ export class S3MktService {
       };
     } catch (e) {
       console.error('❌ S3Mkt list-html error:', e);
-      throw new InternalServerErrorException(
-        'Failed to list html in marketing bucket',
-      );
+      throw new InternalServerErrorException('Failed to list html in marketing bucket');
     }
   }
 
@@ -123,14 +129,12 @@ export class S3MktService {
       const stream = res.Body as Readable;
       const chunks: Buffer[] = [];
       for await (const chunk of stream) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as any));
       }
       return Buffer.concat(chunks).toString('utf-8');
     } catch (e) {
       console.error('❌ S3Mkt get-file error:', e);
-      throw new InternalServerErrorException(
-        'Failed to get file from marketing bucket',
-      );
+      throw new InternalServerErrorException('Failed to get file from marketing bucket');
     }
   }
 
@@ -156,9 +160,7 @@ export class S3MktService {
       return { success: true, key, publicUrl: this.publicUrlFromKey(key) };
     } catch (e) {
       console.error('❌ S3Mkt replace error:', e);
-      throw new InternalServerErrorException(
-        'Failed to replace file in marketing bucket',
-      );
+      throw new InternalServerErrorException('Failed to replace file in marketing bucket');
     }
   }
 }
