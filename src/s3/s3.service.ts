@@ -139,7 +139,7 @@ export class S3Service {
     }
   }
 
-  async deleteFile(filename: string, employeeNumber: string) {
+  /* async deleteFile(filename: string, employeeNumber: string) {
     const key = `Employees/${employeeNumber}/${filename}`;
 
     const command = new DeleteObjectCommand({
@@ -154,7 +154,7 @@ export class S3Service {
       console.error('S3 Delete Error:', error);
       throw new InternalServerErrorException('Error deleting from S3');
     }
-  }
+  } */
 
   async downloadFile(
     folder: string,
@@ -185,4 +185,52 @@ export class S3Service {
       throw new InternalServerErrorException('Failed to download file');
     }
   }
+
+  async deleteFile(folder: string, filename: string, employeeNumber?: string) {
+    // Construye la key dinámica según si hay employeeNumber o no
+    const key = employeeNumber
+      ? `${folder}/${employeeNumber}/${filename}`
+      : `${folder}/${filename}`;
+
+    console.log('🗑️ Deleting file from S3:', key);
+
+    const command = new DeleteObjectCommand({
+      Bucket: this.bucketName,
+      Key: key,
+    });
+
+    try {
+      await this.s3.send(command);
+      return {
+        success: true,
+        message: `File deleted: ${key}`,
+      };
+    } catch (error) {
+      console.error('❌ S3 Delete Error:', error);
+      throw new InternalServerErrorException('Error deleting from S3');
+    }
+  }
+
+  async deleteFileNoEmployee(folder: string, filename: string) {
+    const key = `${folder}/${filename}`;
+    console.log('🗑️ Deleting file (no employee):', key);
+
+    const command = new DeleteObjectCommand({
+      Bucket: this.bucketName,
+      Key: key,
+    });
+
+    try {
+      await this.s3.send(command);
+      return {
+        success: true,
+        message: `File deleted successfully: ${key}`,
+      };
+    } catch (error) {
+      console.error('❌ Error deleting file (no employee):', error);
+      throw new InternalServerErrorException('Failed to delete file from S3');
+    }
+  }
+
+
 }
