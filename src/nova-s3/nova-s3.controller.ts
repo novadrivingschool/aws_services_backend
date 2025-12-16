@@ -180,22 +180,22 @@ export class NovaS3Controller {
   }
 
   @Get('file-url')
-@ApiOperation({ summary: 'Get presigned GET url (tenant-aware)' })
-@ApiQuery({ name: 'root', required: false, example: 'nova-s3' })
-@ApiQuery({ name: 'path', required: true, example: 'ChatGPT Image.png' })
-@ApiQuery({ name: 'employeeNumber', required: true, example: 'NOVAJG232701' })
-@ApiQuery({ name: 'expiresSeconds', required: false, example: 300 })
-getFileUrl(
-  @Query('root') root = 'nova-s3',
-  @Query('path') path?: string,
-  @Query('employeeNumber') employeeNumber?: string,
-  @Query('expiresSeconds') expiresSeconds?: string,
-) {
-  if (!path) throw new BadRequestException('path is required');
-  const emp = this.requireEmployee(employeeNumber);
-  const exp = expiresSeconds ? Number(expiresSeconds) : undefined;
-  return this.novaS3Service.getFileUrl({ root, path, employeeNumber: emp, expiresSeconds: exp });
-}
+  @ApiOperation({ summary: 'Get presigned GET url (tenant-aware)' })
+  @ApiQuery({ name: 'root', required: false, example: 'nova-s3' })
+  @ApiQuery({ name: 'path', required: true, example: 'ChatGPT Image.png' })
+  @ApiQuery({ name: 'employeeNumber', required: true, example: 'NOVAJG232701' })
+  @ApiQuery({ name: 'expiresSeconds', required: false, example: 300 })
+  getFileUrl(
+    @Query('root') root = 'nova-s3',
+    @Query('path') path?: string,
+    @Query('employeeNumber') employeeNumber?: string,
+    @Query('expiresSeconds') expiresSeconds?: string,
+  ) {
+    if (!path) throw new BadRequestException('path is required');
+    const emp = this.requireEmployee(employeeNumber);
+    const exp = expiresSeconds ? Number(expiresSeconds) : undefined;
+    return this.novaS3Service.getFileUrl({ root, path, employeeNumber: emp, expiresSeconds: exp });
+  }
 
 
   /**
