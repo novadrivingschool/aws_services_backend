@@ -53,3 +53,8 @@ docker run --name aws_services_backend \
   aws_services_backend
 
 docker logs aws_services_backend -f
+
+
+<!-- CREATE TABLE -->
+npm run typeorm -- migration:generate ./src/migrations/CreateUpdateTables
+npm run migration:run
