@@ -5,12 +5,8 @@ import { ValidationPipe } from '@nestjs/common';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  app.enableCors({
-    origin: '*', // ✅ CUALQUIER ORIGEN
-    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-    credentials: false, // ❗ OBLIGATORIO en este caso
-  });
+  // ❌ NO CORS AQUÍ (porque el proxy lo está metiendo)
+  // app.enableCors(...)
 
   app.useGlobalPipes(
     new ValidationPipe({
