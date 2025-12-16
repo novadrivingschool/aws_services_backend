@@ -17,5 +17,4 @@ RUN npm ci --omit=dev
 
 COPY --from=builder /usr/src/app/dist ./dist
 
-# ✅ Arranque directo (evita el error de "node dist/main")
-CMD ["node", "dist/main.js"]
+CMD ["node", "dist/src/main.js"]
