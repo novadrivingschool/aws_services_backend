@@ -3,7 +3,7 @@ FROM node:18 AS builder
 WORKDIR /usr/src/app
 
 COPY package*.json ./
-RUN npm install
+RUN npm ci
 
 COPY . .
 RUN npm run build
@@ -12,9 +12,10 @@ RUN npm run build
 FROM node:18 AS runtime
 WORKDIR /usr/src/app
 
-COPY --from=builder /usr/src/app/package*.json ./
+COPY package*.json ./
+RUN npm ci --omit=dev
+
 COPY --from=builder /usr/src/app/dist ./dist
 
-RUN npm install --production
-
-CMD ["npm", "run", "start:prod"]
+# ✅ Arranque directo (evita el error de "node dist/main")
+CMD ["node", "dist/main.js"]
