@@ -1,17 +1,20 @@
+# Etapa de construcción
 FROM node:18 AS builder
 WORKDIR /usr/src/app
 
 COPY package*.json ./
-RUN npm ci
+RUN npm install
+
 COPY . .
 RUN npm run build
 
+# Etapa de producción
 FROM node:18 AS runtime
 WORKDIR /usr/src/app
 
-COPY package*.json ./
-RUN npm ci --omit=dev
-
+COPY --from=builder /usr/src/app/package*.json ./
 COPY --from=builder /usr/src/app/dist ./dist
 
-CMD ["node", "dist/main.js"]
+RUN npm install --production
+
+CMD ["npm", "run", "start:prod"]
