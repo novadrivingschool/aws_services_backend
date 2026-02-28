@@ -1,23 +1,23 @@
-import { 
-  Controller, 
-  Get, 
-  Post, 
-  Patch, 
-  Delete, 
-  Body, 
-  Query, 
-  BadRequestException, 
-  UploadedFile, 
+import {
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Delete,
+  Body,
+  Query,
+  BadRequestException,
+  UploadedFile,
   UseInterceptors,
   HttpException,
-  HttpStatus 
+  HttpStatus
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { S3MktService } from './s3mkt.service';
 
 @Controller('s3mkt')
 export class S3MktController {
-  constructor(private readonly s3mkt: S3MktService) {}
+  constructor(private readonly s3mkt: S3MktService) { }
 
   @Post('upload')
   @UseInterceptors(FileInterceptor('file'))
@@ -45,18 +45,26 @@ export class S3MktController {
   async listHtml(@Query('folder') folder: string) {
     if (!folder) throw new BadRequestException('folder is required');
     console.log('Listing HTML templates in folder:', folder);
-    return this.s3mkt.listHtml(folder);
+
+    try {
+      const result = await this.s3mkt.listHtml(folder);
+      console.log('Successfully listed HTML templates:', result.count, 'templates found');
+      return result;
+    } catch (e) {
+      console.error('Error while listing HTML templates:', e);
+      throw e;
+    }
   }
 
   @Get('file')
   async getFile(@Query('key') key: string) {
     if (!key) throw new BadRequestException('key is required');
     const content = await this.s3mkt.getFileContent(key);
-    return { 
-      success: true, 
-      key, 
-      contentType: 'text/html; charset=utf-8', 
-      content 
+    return {
+      success: true,
+      key,
+      contentType: 'text/html; charset=utf-8',
+      content
     };
   }
 
@@ -97,24 +105,24 @@ export class S3MktController {
   ) {
     if (!oldFolderPath) throw new BadRequestException('oldFolderPath is required');
     if (!newFolderPath) throw new BadRequestException('newFolderPath is required');
-    
+
     const basePath = 'Marketing/templates/crm';
     if (!oldFolderPath.startsWith(basePath) || !newFolderPath.startsWith(basePath)) {
       throw new BadRequestException('Solo se pueden renombrar carpetas dentro del directorio de templates');
     }
-    
+
     return this.s3mkt.renameFolder(oldFolderPath, newFolderPath);
   }
 
   @Delete('delete-folder')
   async deleteFolder(@Query('folderPath') folderPath: string) {
     if (!folderPath) throw new BadRequestException('folderPath is required');
-    
+
     const basePath = 'Marketing/templates/crm';
     if (!folderPath.startsWith(basePath)) {
       throw new BadRequestException('Solo se pueden eliminar carpetas dentro del directorio de templates');
     }
-    
+
     return this.s3mkt.deleteFolder(folderPath);
   }
 
@@ -133,7 +141,8 @@ export class S3MktController {
     if (!templateName) throw new BadRequestException('templateName is required');
     if (!htmlContent) throw new BadRequestException('htmlContent is required');
     if (!folder) throw new BadRequestException('folder is required');
-    
+
     return this.s3mkt.migrateLegacyTemplate(templateName, htmlContent, folder);
   }
+
 }

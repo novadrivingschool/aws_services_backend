@@ -5,8 +5,15 @@ import { ValidationPipe } from '@nestjs/common';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // 🚫 NO app.enableCors()
-  // 🚫 NO middleware que setee headers CORS
+  // 🟡 CONFIGURACIÓN CORRECTA DE CORS
+  app.enableCors({
+    origin: true, // Permite cualquier origen (frontend)
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+    credentials: true,
+  });
+
+  // ❌ ELIMINA el app.use((req, res, next) => {...}) que tenías aquí. 
+  // NestJS ya maneja el OPTIONS (preflight) con el enableCors de arriba.
 
   app.useGlobalPipes(
     new ValidationPipe({
@@ -16,7 +23,9 @@ async function bootstrap() {
     }),
   );
 
-  await app.listen(process.env.PORT ?? 3000);
+  const port = process.env.PORT || 5001; // Asegúrate de que el puerto cuadre
+  await app.listen(port);
+  console.log(`🚀 Backend running on: http://localhost:${port}`);
 }
 
 bootstrap();

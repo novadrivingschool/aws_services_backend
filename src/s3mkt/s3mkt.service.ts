@@ -107,8 +107,11 @@ export class S3MktService {
     templates: TemplateInfo[];
   }> {
     const prefix = folder.endsWith('/') ? folder : `${folder}/`;
+    console.log('Using prefix:', prefix);
+
     try {
-      // 1. Primero listamos los prefijos (subcarpetas)
+      // 1. List subfolders (prefixes)
+      console.log('Fetching subfolders for folder:', folder);
       const res = await this.s3.send(
         new ListObjectsV2Command({
           Bucket: this.BUCKET,
@@ -116,27 +119,32 @@ export class S3MktService {
           Delimiter: '/',
         }),
       );
+      console.log('Subfolders fetched:', res.CommonPrefixes);
 
       const subfolders = res.CommonPrefixes?.map(p => p.Prefix!).filter(Boolean) || [];
+      console.log('Subfolders to process:', subfolders);
+
       const templates: TemplateInfo[] = [];
 
-      // 2. Para cada subcarpeta, verificar si contiene index.html
+      // 2. For each subfolder, check if it contains index.html
       for (const subfolder of subfolders) {
+        console.log('Checking subfolder:', subfolder);
         const list = await this.s3.send(
           new ListObjectsV2Command({
             Bucket: this.BUCKET,
             Prefix: subfolder,
           }),
         );
+        console.log('Files in subfolder:', list.Contents);
 
         const indexHtml = list.Contents?.find(obj =>
           obj.Key?.toLowerCase().endsWith('index.html')
         );
 
         if (indexHtml && indexHtml.Key) {
-          // Extraer nombre del template de la ruta de la carpeta
-          const folderName = subfolder.replace(prefix, '').replace(/\/$/, '');
+          console.log('Found index.html in subfolder:', subfolder);
 
+          const folderName = subfolder.replace(prefix, '').replace(/\/$/, '');
           templates.push({
             key: indexHtml.Key,
             folder: subfolder,
@@ -152,13 +160,16 @@ export class S3MktService {
         }
       }
 
-      // 3. También buscar archivos HTML sueltos (para compatibilidad con templates antiguos)
+      // 3. Also look for loose HTML files (for legacy templates)
+      console.log('Fetching loose HTML files...');
       const allFilesRes = await this.s3.send(
         new ListObjectsV2Command({
           Bucket: this.BUCKET,
           Prefix: prefix,
         }),
       );
+
+      console.log('Loose HTML files fetched:', allFilesRes.Contents);
 
       const looseHtmlFiles: TemplateInfo[] = (allFilesRes.Contents || [])
         .filter(obj =>
@@ -188,6 +199,7 @@ export class S3MktService {
         });
 
       const allTemplates = [...templates, ...looseHtmlFiles];
+      console.log('All templates found:', allTemplates.length);
 
       return {
         success: true,
@@ -520,4 +532,5 @@ export class S3MktService {
       throw new InternalServerErrorException('Failed to migrate legacy template');
     }
   }
+
 }

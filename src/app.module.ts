@@ -6,6 +6,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { S3Module } from './s3/s3.module';
 import { S3mktModule } from './s3mkt/s3mkt.module';
 import { NovaS3Module } from './nova-s3/nova-s3.module';
+import { CrmS3Module } from './crm-s3/crm-s3.module';
 
 
 dotenv.config();
@@ -32,7 +33,8 @@ dotenv.config();
     }),
     S3Module,
     S3mktModule,
-    NovaS3Module
+    NovaS3Module,
+    CrmS3Module
   ],
 })
 export class AppModule { }
