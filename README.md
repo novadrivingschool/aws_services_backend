@@ -31,28 +31,28 @@ $ npm run test:cov
 ```
 
 ## Develping Docker
-docker build -t aws_services_backend_dev .
+docker build -t aws-s3-api-dev .
 
-docker run --name aws_services_backend_dev \
+docker run --name aws-s3-api-dev \
   -d \
   -p 5010:5010 \
   --restart always \
   -v $(pwd)/.env:/usr/src/app/.env \
-  aws_services_backend_dev
+  aws-s3-api-dev
 
-docker logs aws_services_backend_dev -f
+docker logs aws-s3-api-dev -f
 
 ## Production
-docker build -t aws_services_backend .
+docker build -t aws-s3-api .
 
-docker run --name aws_services_backend \
+docker run --name aws-s3-api \
   -d \
   -p 5010:5010 \
   --restart always \
   -v $(pwd)/.env:/usr/src/app/.env \
-  aws_services_backend
+  aws-s3-api
 
-docker logs aws_services_backend -f
+docker logs aws-s3-api -f
 
 
 <!-- CREATE TABLE -->
