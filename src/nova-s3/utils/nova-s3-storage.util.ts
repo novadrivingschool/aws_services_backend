@@ -17,6 +17,10 @@ import {
   CopyObjectCommand,
   ListObjectsV2Command,
   GetObjectCommand,
+  CreateMultipartUploadCommand,
+  UploadPartCommand,
+  CompleteMultipartUploadCommand,
+  AbortMultipartUploadCommand,
   _Object,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -412,9 +416,7 @@ export class NovaS3StorageUtil {
   // ---------------------------------------------------------------------------
 
   /**
-   * Presigned GET URL (5 min)
-   * baseFolder: ej "nova-s3/EMP123"
-   * relative: ej "Marketing/Creatives/logo.png"
+   * Presigned GET URL (5 min default)
    */
   async presignedGetUrl(baseFolder: string, relative: string, expiresSeconds = 60 * 5) {
     const key = this.buildKey(baseFolder, relative);
@@ -426,6 +428,149 @@ export class NovaS3StorageUtil {
     } catch (error) {
       console.error('S3 presignedGetUrl error:', error);
       return { success: false, error: (error as Error).message };
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Presigned PUT URL — upload directo desde el browser (storage only)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Presigned PUT URL para subida directa desde el frontend.
+   * El browser hace PUT directo a S3 sin pasar por el backend.
+   *
+   * baseFolder: "nova-s3/EMP123"
+   * relative:   "Marketing/logo.png"
+   * contentType: "image/png"
+   * expiresSeconds: 3600 (1h default — suficiente para archivos grandes)
+   */
+  async presignedPutUrl(
+    baseFolder: string,
+    relative: string,
+    contentType: string,
+    expiresSeconds = 3600,
+  ): Promise<{ success: boolean; url: string; key: string }> {
+    const key = this.buildKey(baseFolder, relative);
+
+    try {
+      const command = new PutObjectCommand({
+        Bucket: this.bucketName,
+        Key: key,
+        ContentType: contentType,
+      });
+      const url = await getSignedUrl(this.s3, command, { expiresIn: expiresSeconds });
+      return { success: true, url, key };
+    } catch (error) {
+      console.error('S3 presignedPutUrl error:', error);
+      throw new InternalServerErrorException('Failed to generate presigned PUT url');
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Multipart Upload — archivos grandes (storage only)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Inicia un Multipart Upload en S3.
+   * Devuelve uploadId y la key final.
+   */
+  async createMultipartUpload(
+    baseFolder: string,
+    relative: string,
+    contentType: string,
+  ): Promise<{ uploadId: string; key: string }> {
+    const key = this.buildKey(baseFolder, relative);
+
+    try {
+      const result = await this.s3.send(
+        new CreateMultipartUploadCommand({
+          Bucket: this.bucketName,
+          Key: key,
+          ContentType: contentType,
+        }),
+      );
+
+      if (!result.UploadId) throw new Error('S3 did not return UploadId');
+      return { uploadId: result.UploadId, key };
+    } catch (error) {
+      console.error('S3 createMultipartUpload error:', error);
+      throw new InternalServerErrorException('Failed to create multipart upload');
+    }
+  }
+
+  /**
+   * Genera una presigned URL para subir una PARTE del multipart.
+   * El browser hace PUT directo a S3 con el chunk binario.
+   *
+   * key: key completo en S3 (devuelto por createMultipartUpload)
+   * uploadId: devuelto por createMultipartUpload
+   * partNumber: 1-based (1 a 10000)
+   * expiresSeconds: 3600 default
+   */
+  async presignedUploadPart(
+    key: string,
+    uploadId: string,
+    partNumber: number,
+    expiresSeconds = 3600,
+  ): Promise<{ url: string; partNumber: number }> {
+    try {
+      const command = new UploadPartCommand({
+        Bucket: this.bucketName,
+        Key: key,
+        UploadId: uploadId,
+        PartNumber: partNumber,
+      });
+      const url = await getSignedUrl(this.s3, command, { expiresIn: expiresSeconds });
+      return { url, partNumber };
+    } catch (error) {
+      console.error('S3 presignedUploadPart error:', error);
+      throw new InternalServerErrorException(`Failed to generate presigned URL for part ${partNumber}`);
+    }
+  }
+
+  /**
+   * Completa el Multipart Upload en S3.
+   * parts: [{ PartNumber: 1, ETag: '"abc123"' }, ...]
+   * ETags vienen del header de respuesta de cada PUT de parte.
+   */
+  async completeMultipartUpload(
+    key: string,
+    uploadId: string,
+    parts: { PartNumber: number; ETag: string }[],
+  ): Promise<NovaS3OpResult> {
+    try {
+      await this.s3.send(
+        new CompleteMultipartUploadCommand({
+          Bucket: this.bucketName,
+          Key: key,
+          UploadId: uploadId,
+          MultipartUpload: { Parts: parts },
+        }),
+      );
+      return { success: true, message: 'Multipart upload completed', key };
+    } catch (error) {
+      console.error('S3 completeMultipartUpload error:', error);
+      throw new InternalServerErrorException('Failed to complete multipart upload');
+    }
+  }
+
+  /**
+   * Aborta el Multipart Upload (limpieza si falla).
+   */
+  async abortMultipartUpload(key: string, uploadId: string): Promise<NovaS3OpResult> {
+    try {
+      await this.s3.send(
+        new AbortMultipartUploadCommand({
+          Bucket: this.bucketName,
+          Key: key,
+          UploadId: uploadId,
+        }),
+      );
+      return { success: true, message: 'Multipart upload aborted', key };
+    } catch (error) {
+      console.error('S3 abortMultipartUpload error:', error);
+      // No lanzar — abort es best-effort
+      return { success: false, message: (error as Error).message, key };
     }
   }
 }

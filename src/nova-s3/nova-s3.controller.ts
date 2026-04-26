@@ -20,6 +20,11 @@ import { RenameDto } from './dto/rename.dto';
 import { MoveFileDto } from './dto/move-file.dto';
 import { MoveFolderDto } from './dto/move-folder.dto';
 import { DeleteDto } from './dto/delete.dto';
+import { PresignUploadDto } from './dto/presign-upload.dto';
+import { PresignBatchDto } from './dto/presign-batch.dto';
+import { CompleteMultipartDto, AbortMultipartDto } from './dto/complete-multipart.dto';
+import { RegisterUploadDto } from './dto/register-upload.dto';
+import { RegisterBatchDto } from './dto/register-batch.dto';
 
 import {
   ApiBadRequestResponse,
@@ -175,8 +180,43 @@ export class NovaS3Controller {
   tree(
     @Query('root') root = 'nova-s3',
     @Query('employeeNumber') employeeNumber?: string,
+    @Query('foldersOnly') foldersOnly?: string,
   ): Promise<NovaS3TreeResponseDto> {
-    return this.novaS3Service.tree(root, this.requireEmployee(employeeNumber));
+    return this.novaS3Service.tree(root, this.requireEmployee(employeeNumber), foldersOnly === 'true');
+  }
+
+  @Get('search')
+  @ApiOperation({
+    summary: 'Search files/folders by name (DB LIKE — server-side)',
+    description: 'Searches nova_s3 by name LIKE %query%. Much faster than client-side recursion on large datasets.',
+  })
+  @ApiQuery({ name: 'root', required: false, example: 'nova-s3' })
+  @ApiQuery({ name: 'q', required: true, example: 'invoice' })
+  @ApiQuery({ name: 'employeeNumber', required: true, example: 'NOVAJG232701' })
+  @ApiQuery({ name: 'limit', required: false, example: 200 })
+  search(
+    @Query('root') root = 'nova-s3',
+    @Query('q') query = '',
+    @Query('employeeNumber') employeeNumber?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const emp = this.requireEmployee(employeeNumber);
+    return this.novaS3Service.search({ root, query, employeeNumber: emp, limit: limit ? Number(limit) : undefined });
+  }
+
+  @Get('stats')
+  @ApiOperation({
+    summary: 'Get storage stats (SQL COUNT/SUM — server-side)',
+    description: 'Returns folder count, file count, and total size calculated with a SQL query. Use this instead of client-side tree traversal.',
+  })
+  @ApiQuery({ name: 'root', required: false, example: 'nova-s3' })
+  @ApiQuery({ name: 'employeeNumber', required: true, example: 'NOVAJG232701' })
+  stats(
+    @Query('root') root = 'nova-s3',
+    @Query('employeeNumber') employeeNumber?: string,
+  ) {
+    const emp = this.requireEmployee(employeeNumber);
+    return this.novaS3Service.stats(root, emp);
   }
 
   @Get('file-url')
@@ -525,6 +565,119 @@ export class NovaS3Controller {
   moveFolder(@Body() dto: MoveFolderDto) {
     dto.employeeNumber = this.requireEmployee(dto.employeeNumber);
     return this.novaS3Service.moveFolder(dto);
+  }
+
+  // ---------------------------------------------------------------------------
+  // PRESIGNED PUT — upload directo desde browser sin pasar por el backend
+  // ---------------------------------------------------------------------------
+
+  /**
+   * PRESIGN UPLOAD (single file)
+   * Genera una presigned PUT URL para que el browser suba directo a S3.
+   * Flujo: Frontend pide URL → sube directo a S3 → llama /register
+   */
+  @Post('upload/presign')
+  @ApiOperation({
+    summary: 'Get presigned PUT URL for direct browser upload (single file)',
+    description:
+      'Returns a presigned PUT URL so the browser can upload the file directly to S3 without routing through the backend. ' +
+      'After the direct upload succeeds, call POST /nova-s3/register to persist the file in DB. ' +
+      'This avoids double-transfer and is dramatically faster for large files.',
+  })
+  @ApiBody({ type: PresignUploadDto })
+  presignUpload(@Body() dto: PresignUploadDto) {
+    dto.employeeNumber = this.requireEmployee(dto.employeeNumber);
+    return this.novaS3Service.presignUpload(dto);
+  }
+
+  /**
+   * PRESIGN BATCH
+   * Genera presigned URLs para múltiples archivos en una sola llamada.
+   * - Archivos < 100MB → presigned PUT (type: 'put')
+   * - Archivos >= 100MB → Multipart Upload (type: 'multipart', incluye URLs por parte)
+   */
+  @Post('upload/presign/batch')
+  @ApiOperation({
+    summary: 'Get presigned URLs for batch direct upload (single PUT or multipart per file)',
+    description:
+      'Generates presigned URLs for all files in one round trip. ' +
+      'Small files get a single presigned PUT URL. Large files (>= threshold) get a multipart upload with per-part presigned URLs. ' +
+      'Upload all files directly to S3 in parallel, then call POST /nova-s3/register/batch to persist them in DB.',
+  })
+  @ApiBody({ type: PresignBatchDto })
+  presignBatch(@Body() dto: PresignBatchDto) {
+    dto.employeeNumber = this.requireEmployee(dto.employeeNumber);
+    return this.novaS3Service.presignBatch(dto);
+  }
+
+  /**
+   * COMPLETE MULTIPART
+   * Ensambla las partes del multipart upload y registra en DB.
+   * Llamar con los ETags devueltos por S3 en cada PUT de parte.
+   */
+  @Post('upload/multipart/complete')
+  @ApiOperation({
+    summary: 'Complete multipart upload and register file in DB',
+    description:
+      'Assembles all uploaded parts into the final S3 object and persists the file record in DB. ' +
+      'Send the parts array with { partNumber, etag } from each part upload response header.',
+  })
+  @ApiBody({ type: CompleteMultipartDto })
+  completeMultipart(@Body() dto: CompleteMultipartDto) {
+    dto.employeeNumber = this.requireEmployee(dto.employeeNumber);
+    return this.novaS3Service.completeMultipart(dto);
+  }
+
+  /**
+   * ABORT MULTIPART
+   * Cancela un multipart upload en curso (cleanup de partes en S3).
+   */
+  @Post('upload/multipart/abort')
+  @ApiOperation({
+    summary: 'Abort multipart upload (cleanup)',
+    description: 'Aborts an in-progress multipart upload and removes all uploaded parts from S3.',
+  })
+  @ApiBody({ type: AbortMultipartDto })
+  abortMultipart(@Body() dto: AbortMultipartDto) {
+    return this.novaS3Service.abortMultipart(dto);
+  }
+
+  // ---------------------------------------------------------------------------
+  // REGISTER — persiste en DB después de upload directo a S3
+  // ---------------------------------------------------------------------------
+
+  /**
+   * REGISTER SINGLE FILE
+   * Registra un archivo en DB después de que el frontend lo subió directo a S3.
+   */
+  @Post('register')
+  @ApiOperation({
+    summary: 'Register file in DB after direct S3 upload',
+    description:
+      'Persists a file record in the nova_s3 DB table after the frontend uploaded it directly to S3 via presigned URL. ' +
+      'Also ensures all parent folders exist in DB.',
+  })
+  @ApiBody({ type: RegisterUploadDto })
+  registerUpload(@Body() dto: RegisterUploadDto) {
+    dto.employeeNumber = this.requireEmployee(dto.employeeNumber);
+    return this.novaS3Service.registerUpload(dto);
+  }
+
+  /**
+   * REGISTER BATCH
+   * Registra múltiples archivos en DB de una sola vez (al final de un batch upload directo).
+   */
+  @Post('register/batch')
+  @ApiOperation({
+    summary: 'Register multiple files in DB after direct S3 batch upload',
+    description:
+      'Bulk-registers file records in DB after a batch of direct S3 uploads via presigned URLs. ' +
+      'Ensures all parent folder chains exist in DB before inserting.',
+  })
+  @ApiBody({ type: RegisterBatchDto })
+  registerBatch(@Body() dto: RegisterBatchDto) {
+    dto.employeeNumber = this.requireEmployee(dto.employeeNumber);
+    return this.novaS3Service.registerBatch(dto);
   }
 
   /**

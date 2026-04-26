@@ -10,6 +10,11 @@ import { RenameDto } from './dto/rename.dto';
 import { MoveFileDto } from './dto/move-file.dto';
 import { MoveFolderDto } from './dto/move-folder.dto';
 import { DeleteDto } from './dto/delete.dto';
+import { PresignUploadDto } from './dto/presign-upload.dto';
+import { PresignBatchDto } from './dto/presign-batch.dto';
+import { CompleteMultipartDto, AbortMultipartDto } from './dto/complete-multipart.dto';
+import { RegisterUploadDto } from './dto/register-upload.dto';
+import { RegisterBatchDto } from './dto/register-batch.dto';
 import { NovaS3StorageUtil } from './utils/nova-s3-storage.util';
 
 /**
@@ -552,19 +557,26 @@ export class NovaS3Service {
     }
   }
 
-  async tree(root = 'nova-s3', employeeNumber?: string): Promise<NovaS3TreeResponseDto> {
+  async tree(root = 'nova-s3', employeeNumber?: string, foldersOnly = false): Promise<NovaS3TreeResponseDto> {
     const fn = 'tree';
-    this.logCtx(fn, { root, employeeNumber });
+    this.logCtx(fn, { root, employeeNumber, foldersOnly });
 
     try {
       const r = this.normRoot(root);
       const emp = employeeNumber ?? null;
 
-      this.logStep(fn, 'normalized', { root: r, employeeNumber: emp });
+      this.logStep(fn, 'normalized', { root: r, employeeNumber: emp, foldersOnly });
+
+      // ✅ foldersOnly: cargar solo carpetas (mucho más liviano para el panel lateral)
+      const where: any = { root: r, employeeNumber: emp };
+      if (foldersOnly) where.type = 'folder';
 
       const all = await this.repo.find({
-        where: { root: r, employeeNumber: emp } as any,
+        where,
         order: { type: 'ASC', name: 'ASC' } as any,
+        select: foldersOnly
+          ? { id: true, path: true, name: true, type: true, parentPath: true }
+          : undefined,
       });
 
       this.logStep(fn, 'db rows', { count: all.length, sample: all.slice(0, 3).map(x => ({ path: x.path, parentPath: x.parentPath, type: x.type })) });
@@ -1149,6 +1161,291 @@ export class NovaS3Service {
     const out = this.normPath(k);
     this.logStep(fn, 'computed (already relative)', { out });
     return out;
+  }
+
+  // ---------------------------------------------------------------------------
+  // SEARCH (DB LIKE query — mucho más eficiente que recursión JS en el cliente)
+  // ---------------------------------------------------------------------------
+
+  async search(dto: { root: string; query: string; employeeNumber: string; limit?: number }): Promise<any> {
+    const fn = 'search';
+    this.logCtx(fn, dto as any);
+
+    const root = this.normRoot(dto.root);
+    const emp = dto.employeeNumber;
+    const q = (dto.query ?? '').trim();
+    const limit = Math.min(dto.limit ?? 200, 500);
+
+    if (!q) return { success: true, results: [], total: 0 };
+
+    const { Like: LikeOp } = await import('typeorm');
+
+    const results = await this.repo.find({
+      where: [
+        { root, employeeNumber: emp, name: LikeOp(`%${q}%`) } as any,
+      ],
+      order: { type: 'ASC', name: 'ASC' } as any,
+      take: limit,
+    });
+
+    this.logStep(fn, 'search done', { count: results.length, q });
+    return { success: true, results, total: results.length };
+  }
+
+  // ---------------------------------------------------------------------------
+  // STATS (SQL COUNT/SUM — O(1) vs O(N) traversal JS en el cliente)
+  // ---------------------------------------------------------------------------
+
+  async stats(root: string, employeeNumber: string): Promise<any> {
+    const fn = 'stats';
+    this.logCtx(fn, { root, employeeNumber });
+
+    const r = this.normRoot(root);
+    const emp = employeeNumber ?? null;
+
+    const rows = await this.repo
+      .createQueryBuilder('n')
+      .select('n.type', 'type')
+      .addSelect('COUNT(*)', 'count')
+      .addSelect('SUM(n.size)', 'totalSize')
+      .where('n.root = :root', { root: r })
+      .andWhere('n.employeeNumber = :emp', { emp })
+      .groupBy('n.type')
+      .getRawMany();
+
+    let folders = 0, files = 0, totalSize = 0;
+    for (const row of rows) {
+      if (row.type === 'folder') folders = Number(row.count);
+      else { files = Number(row.count); totalSize = Number(row.totalSize) || 0; }
+    }
+
+    this.logStep(fn, 'stats done', { folders, files, totalSize });
+    return { success: true, folders, files, totalSize };
+  }
+
+  // ---------------------------------------------------------------------------
+  // PRESIGNED PUT + MULTIPART (upload directo desde browser)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Genera una presigned PUT URL para un solo archivo.
+   * El browser sube directo a S3 con esa URL.
+   * Luego el frontend llama a registerUpload para persistir en DB.
+   */
+  async presignUpload(dto: PresignUploadDto): Promise<any> {
+    const fn = 'presignUpload';
+    this.logCtx(fn, { ...dto, size: dto.size });
+
+    const root = this.normRoot(dto.root);
+    const path = this.normPath(dto.path);
+    const emp = dto.employeeNumber;
+    const filename = this.relFromOriginalName(dto.filename);
+    const relativePath = path ? `${path}/${filename}` : filename;
+    const expiresSeconds = dto.expiresSeconds ?? 3600;
+
+    await this.ensureFolderChain(root, path, emp);
+
+    const baseFolder = this.s3BaseFolder(root, emp);
+    const result = await this.storage.presignedPutUrl(baseFolder, relativePath, dto.contentType, expiresSeconds);
+    const s3Key = this.buildTenantS3Key(root, emp, relativePath, false);
+
+    this.logStep(fn, 'presigned PUT url generated', { relativePath, s3Key });
+
+    return {
+      success: true,
+      url: result.url,
+      s3Key,
+      path: relativePath,
+      expiresSeconds,
+    };
+  }
+
+  /**
+   * Genera presigned URLs para un lote de archivos.
+   * - Archivos < multipartThreshold => presigned PUT (un solo PUT)
+   * - Archivos >= multipartThreshold => Multipart Upload (múltiples partes en paralelo)
+   *
+   * El frontend sube cada archivo directo a S3 y luego llama registerBatch.
+   */
+  async presignBatch(dto: PresignBatchDto): Promise<any> {
+    const fn = 'presignBatch';
+    this.logCtx(fn, { ...dto, filesCount: dto.files?.length });
+
+    const root = this.normRoot(dto.root);
+    const basePath = this.normPath(dto.basePath);
+    const emp = dto.employeeNumber;
+    const multipartThreshold = dto.multipartThreshold ?? 100 * 1024 * 1024; // 100 MB
+    const partSize = Math.max(dto.partSize ?? 10 * 1024 * 1024, 5 * 1024 * 1024); // min 5 MB (S3 requirement)
+    const urlExpires = dto.urlExpiresSeconds ?? 3600;
+
+    const folderCache = new Set<string>();
+    const results: any[] = [];
+
+    for (const fileItem of dto.files) {
+      const rel = this.relFromOriginalName(fileItem.relativePath);
+      const finalPath = basePath ? this.joinPath(basePath, rel) : rel;
+      const parentDir = this.parentOf(finalPath);
+      const baseFolder = this.s3BaseFolder(root, emp);
+
+      await this.ensureFolderChainCached(root, parentDir, emp, folderCache);
+
+      const s3Key = this.buildTenantS3Key(root, emp, finalPath, false);
+
+      if (fileItem.size < multipartThreshold) {
+        // Archivo pequeño: un solo presigned PUT
+        const { url } = await this.storage.presignedPutUrl(baseFolder, finalPath, fileItem.contentType, urlExpires);
+
+        results.push({
+          type: 'put',
+          filename: fileItem.filename,
+          path: finalPath,
+          s3Key,
+          presignedUrl: url,
+          expiresSeconds: urlExpires,
+        });
+      } else {
+        // Archivo grande: multipart
+        const { uploadId, key } = await this.storage.createMultipartUpload(baseFolder, finalPath, fileItem.contentType);
+        const partCount = Math.ceil(fileItem.size / partSize);
+
+        const parts: { partNumber: number; presignedUrl: string }[] = [];
+        for (let p = 1; p <= partCount; p++) {
+          const { url } = await this.storage.presignedUploadPart(key, uploadId, p, urlExpires);
+          parts.push({ partNumber: p, presignedUrl: url });
+        }
+
+        results.push({
+          type: 'multipart',
+          filename: fileItem.filename,
+          path: finalPath,
+          s3Key: key,
+          uploadId,
+          partSize,
+          parts,
+          expiresSeconds: urlExpires,
+        });
+      }
+    }
+
+    this.logStep(fn, 'batch presign done', { total: results.length });
+    return { success: true, files: results };
+  }
+
+  /**
+   * Completa un Multipart Upload: ensambla las partes en S3 y guarda en DB.
+   */
+  async completeMultipart(dto: CompleteMultipartDto): Promise<any> {
+    const fn = 'completeMultipart';
+    this.logCtx(fn, { ...dto, partsCount: dto.parts?.length });
+
+    const root = this.normRoot(dto.root);
+    const path = this.normPath(dto.path);
+    const emp = dto.employeeNumber;
+
+    const s3Parts = dto.parts.map((p) => ({ PartNumber: p.partNumber, ETag: p.etag }));
+    const raw = await this.storage.completeMultipartUpload(dto.s3Key, dto.uploadId, s3Parts);
+
+    // Guardar en DB
+    await this.ensureFolderChain(root, this.parentOf(path), emp);
+    await this.repo.upsert(
+      [{
+        root,
+        path,
+        parentPath: this.parentOf(path),
+        name: this.nameOf(path),
+        type: 'file' as any,
+        s3Key: dto.s3Key,
+        employeeNumber: emp as any,
+        size: dto.size ?? null,
+        mimeType: dto.mimeType ?? null,
+        meta: { op: 'directUploadMultipart' } as any,
+      }],
+      ['root', 'employeeNumber', 'path'] as any,
+    );
+
+    this.logStep(fn, 'multipart completed + DB saved', { path, s3Key: dto.s3Key });
+    return this.toOpResponse({ ...raw, path, s3Key: dto.s3Key, message: 'Multipart upload completed' });
+  }
+
+  /**
+   * Aborta un Multipart Upload (cleanup en S3).
+   */
+  async abortMultipart(dto: AbortMultipartDto): Promise<any> {
+    const fn = 'abortMultipart';
+    this.logCtx(fn, dto as any);
+    const raw = await this.storage.abortMultipartUpload(dto.s3Key, dto.uploadId);
+    return this.toOpResponse(raw);
+  }
+
+  /**
+   * Registra un archivo en DB después de que el frontend lo subió directo a S3.
+   * Para archivos pequeños (presigned PUT).
+   */
+  async registerUpload(dto: RegisterUploadDto): Promise<any> {
+    const fn = 'registerUpload';
+    this.logCtx(fn, dto as any);
+
+    const root = this.normRoot(dto.root);
+    const path = this.normPath(dto.path);
+    const emp = dto.employeeNumber;
+
+    await this.ensureFolderChain(root, this.parentOf(path), emp);
+
+    await this.repo.upsert(
+      [{
+        root,
+        path,
+        parentPath: this.parentOf(path),
+        name: this.nameOf(path),
+        type: 'file' as any,
+        s3Key: dto.s3Key,
+        employeeNumber: emp as any,
+        size: dto.size ?? null,
+        mimeType: dto.mimeType ?? null,
+        meta: { op: 'directUpload' } as any,
+      }],
+      ['root', 'employeeNumber', 'path'] as any,
+    );
+
+    this.logStep(fn, 'registered in DB', { path, s3Key: dto.s3Key });
+    return { success: true, path, s3Key: dto.s3Key, message: 'File registered' };
+  }
+
+  /**
+   * Registra múltiples archivos en DB de una sola vez.
+   * Llamado al final de un batch upload directo.
+   */
+  async registerBatch(dto: RegisterBatchDto): Promise<any> {
+    const fn = 'registerBatch';
+    this.logCtx(fn, { ...dto, itemsCount: dto.items?.length });
+
+    const root = this.normRoot(dto.root);
+    const emp = dto.employeeNumber;
+    const folderCache = new Set<string>();
+
+    const rows: Partial<NovaS3>[] = [];
+    for (const item of dto.items) {
+      const path = this.normPath(item.path);
+      await this.ensureFolderChainCached(root, this.parentOf(path), emp, folderCache);
+
+      rows.push({
+        root,
+        path,
+        parentPath: this.parentOf(path),
+        name: this.nameOf(path),
+        type: 'file' as any,
+        s3Key: item.s3Key,
+        employeeNumber: emp as any,
+        size: item.size ?? null,
+        mimeType: item.mimeType ?? null,
+        meta: { op: 'directUploadBatch' },
+      } as any);
+    }
+
+    if (rows.length) await this.upsertFiles(rows);
+
+    this.logStep(fn, 'batch registered in DB', { count: rows.length });
+    return { success: true, count: rows.length, message: `Registered ${rows.length} files` };
   }
 
   async getFileUrl(dto: { root: string; path: string; employeeNumber: string; expiresSeconds?: number }) {
