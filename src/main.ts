@@ -13,8 +13,9 @@ async function bootstrap() {
 
   // 🟡 CONFIGURACIÓN CORRECTA DE CORS
   app.enableCors({
-    origin: true, // Permite cualquier origen (frontend)
+    origin: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
     credentials: true,
   });
 

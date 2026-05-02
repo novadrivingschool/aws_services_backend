@@ -375,27 +375,37 @@ export class NovaS3Service {
       if (!exists) {
         this.logStep(fn, 'folder NOT exists -> create in DB', { acc });
 
-        await this.repo.save({
-          root,
-          path: acc,
-          parentPath: this.parentOf(acc),
-          name: part,
-          type: 'folder',
-          s3Key: this.buildTenantS3Key(root, employeeNumber, acc, true),
-          employeeNumber,
-          size: null,
-          mimeType: null,
-          meta: { op: 'autoFolder' },
-        } as any);
+        try {
+          await this.repo.save({
+            root,
+            path: acc,
+            parentPath: this.parentOf(acc),
+            name: part,
+            type: 'folder',
+            s3Key: this.buildTenantS3Key(root, employeeNumber, acc, true),
+            employeeNumber,
+            size: null,
+            mimeType: null,
+            meta: { op: 'autoFolder' },
+          } as any);
 
-        this.logStep(fn, 'folder saved in DB', {
-          path: acc,
-          parentPath: this.parentOf(acc),
-          s3Key: this.buildTenantS3Key(root, employeeNumber, acc, true),
-        });
+          this.logStep(fn, 'folder saved in DB', {
+            path: acc,
+            parentPath: this.parentOf(acc),
+          });
+        } catch (saveErr: any) {
+          // Ignorar violaciones de constraint único — otro request concurrente creó la carpeta primero
+          const isUniqueViolation =
+            saveErr?.code === '23505' || // PostgreSQL unique violation
+            saveErr?.code === 'ER_DUP_ENTRY' || // MySQL duplicate entry
+            (saveErr?.message && (saveErr.message.includes('duplicate') || saveErr.message.includes('unique')));
 
-        // (tu cached no creaba marker; NO CAMBIO TU LÓGICA) -> solo log que NO se crea marker aquí
-        this.logStep(fn, 'NOTE: cached version does NOT create S3 marker (by design)');
+          if (isUniqueViolation) {
+            this.logStep(fn, 'folder already created by concurrent request (race) -> ok', { acc });
+          } else {
+            throw saveErr; // re-lanzar errores reales
+          }
+        }
       } else {
         this.logStep(fn, 'folder exists (DB)', { acc });
       }
