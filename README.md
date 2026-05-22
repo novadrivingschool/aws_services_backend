@@ -30,31 +30,75 @@ $ npm run test:e2e
 $ npm run test:cov
 ```
 
-## Develping Docker
+## Development Docker
+
+```bash
 docker build -t aws-s3-api-dev .
 
 docker run --name aws-s3-api-dev \
   -d \
-  -p 5010:5010 \
+  -p 5001:5001 \
   --restart always \
   -v $(pwd)/.env:/usr/src/app/.env \
   aws-s3-api-dev
 
 docker logs aws-s3-api-dev -f
+```
 
-## Production
-docker build -t aws-s3-api .
+## Production (Docker Compose)
 
-docker run --name aws-s3-api \
-  -d \
-  -p 5010:5010 \
-  --restart always \
-  -v $(pwd)/.env:/usr/src/app/.env \
-  aws-s3-api
+> Requiere `.env` con todas las variables configuradas antes de correr.
 
-docker logs aws-s3-api -f
+```bash
+# Levantar en producción (build + start)
+docker compose -f docker-compose.prod.yml up -d --build
 
+# Ver logs
+docker compose -f docker-compose.prod.yml logs -f
 
-<!-- CREATE TABLE -->
-npm run typeorm -- migration:generate ./src/migrations/CreateUpdateTables
+# Detener
+docker compose -f docker-compose.prod.yml down
+
+# Rebuild sin cache
+docker compose -f docker-compose.prod.yml build --no-cache
+docker compose -f docker-compose.prod.yml up -d
+```
+
+### Variables de entorno requeridas (.env)
+
+```env
+PORT=5001
+NODE_ENV=production
+
+# AWS S3
+ACCESS_KEY=
+SECRET_ACCESS_KEY=
+REGION=
+BUCKET=
+BUCKET_CRM=
+S3_MKT_BUCKET=
+
+# PostgreSQL
+POSTGRES_HOST=
+POSTGRES_PORT=5432
+POSTGRES_USER=
+POSTGRES_PASSWORD=
+POSTGRES_DB=
+
+# Límites S3
+NOVA_S3_MAX_FOLDER_FILES=
+NOVA_S3_MAX_MULTI_FILES=
+```
+
+## Migrations
+
+```bash
+# Generar migración
+npm run typeorm -- migration:generate ./src/migrations/NombreMigracion
+
+# Correr migraciones
 npm run migration:run
+
+# Revertir última migración
+npm run migration:revert
+```

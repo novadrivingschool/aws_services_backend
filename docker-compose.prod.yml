@@ -1,0 +1,13 @@
+services:
+  aws-services:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aws-services-api
+    restart: always
+    ports:
+      - "${PORT:-5001}:${PORT:-5001}"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
