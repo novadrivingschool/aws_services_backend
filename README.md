@@ -47,11 +47,14 @@ docker logs aws-s3-api-dev -f
 
 ## Development (Docker Compose) — v1
 
-> Monta el código fuente y corre en modo watch (`start:dev`).
+> Requiere `.env` con todas las variables configuradas antes de correr. Node 20.
 
 ```bash
-# Levantar dev (con logs en consola)
-docker-compose -f docker-compose.dev.yml up
+# Levantar dev (build + start)
+docker-compose -f docker-compose.dev.yml up -d --build
+
+# Ver logs
+docker-compose -f docker-compose.dev.yml logs -f
 
 # Detener
 docker-compose -f docker-compose.dev.yml down

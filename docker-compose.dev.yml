@@ -2,9 +2,10 @@ version: "3.8"
 
 services:
   aws-services-dev:
-    image: node:18
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: aws-services-api-dev
-    working_dir: /usr/src/app
     restart: always
     ports:
       - "${PORT:-5001}:${PORT:-5001}"
@@ -12,7 +13,3 @@ services:
       - .env
     environment:
       NODE_ENV: development
-    volumes:
-      - .:/usr/src/app
-      - /usr/src/app/node_modules
-    command: sh -c "npm install && npm run start:dev"
