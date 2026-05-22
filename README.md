@@ -45,23 +45,35 @@ docker run --name aws-s3-api-dev \
 docker logs aws-s3-api-dev -f
 ```
 
+## Development (Docker Compose) — v1
+
+> Monta el código fuente y corre en modo watch (`start:dev`).
+
+```bash
+# Levantar dev (con logs en consola)
+docker-compose -f docker-compose.dev.yml up
+
+# Detener
+docker-compose -f docker-compose.dev.yml down
+```
+
 ## Production (Docker Compose)
 
 > Requiere `.env` con todas las variables configuradas antes de correr.
 
 ```bash
 # Levantar en producción (build + start)
-docker compose -f docker-compose.prod.yml up -d --build
+docker-compose -f docker-compose.prod.yml up -d --build
 
 # Ver logs
-docker compose -f docker-compose.prod.yml logs -f
+docker-compose -f docker-compose.prod.yml logs -f
 
 # Detener
-docker compose -f docker-compose.prod.yml down
+docker-compose -f docker-compose.prod.yml down
 
 # Rebuild sin cache
-docker compose -f docker-compose.prod.yml build --no-cache
-docker compose -f docker-compose.prod.yml up -d
+docker-compose -f docker-compose.prod.yml build --no-cache
+docker-compose -f docker-compose.prod.yml up -d
 ```
 
 ### Variables de entorno requeridas (.env)
