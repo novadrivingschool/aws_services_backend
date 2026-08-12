@@ -36,6 +36,9 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 
+// ✅ Límite multer: 5GB por archivo
+const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024 * 1024;
+
 @ApiTags('Nova S3')
 @Controller('nova-s3')
 export class NovaS3Controller {
@@ -51,6 +54,9 @@ export class NovaS3Controller {
   private requireEmployee(employeeNumber?: string) {
     const emp = (employeeNumber ?? '').trim();
     if (!emp) throw new BadRequestException('employeeNumber is required');
+    if (emp.includes('/') || emp.includes('\\')) {
+      throw new BadRequestException('employeeNumber cannot contain slashes');
+    }
     return emp;
   }
 
@@ -312,7 +318,7 @@ export class NovaS3Controller {
    * - el archivo físico se sube bajo {root}/{employeeNumber}/...
    */
   @Post('upload')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_FILE_SIZE_BYTES } }))
   @ApiOperation({
     summary: 'Upload single file (S3 storage + DB source of truth)',
     description:
@@ -376,7 +382,7 @@ export class NovaS3Controller {
    * - los archivos se guardan bajo {root}/{employeeNumber}/...
    */
   @Post('upload/multiple')
-  @UseInterceptors(FilesInterceptor('files', 3000))
+  @UseInterceptors(FilesInterceptor('files', 3000, { limits: { fileSize: MAX_FILE_SIZE_BYTES } }))
   @ApiOperation({
     summary: 'Upload multiple files to same folder (S3 storage + DB source of truth)',
     description:
@@ -435,7 +441,7 @@ export class NovaS3Controller {
    * - TODO se guarda bajo {root}/{employeeNumber}/...
    */
   @Post('upload/folder')
-  @UseInterceptors(FilesInterceptor('files', 10000))
+  @UseInterceptors(FilesInterceptor('files', 10000, { limits: { fileSize: MAX_FILE_SIZE_BYTES } }))
   @ApiOperation({
     summary: 'Upload folder (keeps structure with paths[]) (S3 + DB)',
     description:

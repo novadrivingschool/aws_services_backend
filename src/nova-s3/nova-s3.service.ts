@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Like, Repository } from 'typeorm';
 
@@ -124,10 +124,24 @@ export class NovaS3Service {
     return out;
   }
 
-  /** Normalize path: trim, remove leading/trailing slashes. */
+  /** Normalize path: trim, remove leading/trailing slashes. Rejects traversal segments. */
   private normPath(path?: string) {
     const out = (path || '').trim().replace(/\\/g, '/').replace(/^\/|\/$/g, '');
+    if (out) {
+      for (const seg of out.split('/')) {
+        if (seg === '' || seg === '.' || seg === '..') {
+          throw new BadRequestException(`Invalid path segment in "${out}"`);
+        }
+      }
+    }
     return out;
+  }
+
+  /** Clamp client-provided expiry seconds: min 60s, max 86400s (24h). */
+  private clampExpiry(seconds: number | undefined, def: number) {
+    const s = Number(seconds);
+    if (!Number.isFinite(s)) return def;
+    return Math.min(Math.max(Math.floor(s), 60), 86400);
   }
 
   /** Join base path + name safely (no duplicate slashes). */
@@ -648,9 +662,14 @@ export class NovaS3Service {
     this.logCtx(fn, dto as any);
 
     try {
+      const rawName = (dto.name ?? '').trim();
+      if (rawName.includes('/') || rawName.includes('\\')) {
+        throw new BadRequestException('Name cannot contain slashes');
+      }
+
       const root = this.normRoot(dto.root);
       const path = this.normPath(dto.path);
-      const name = this.relFromOriginalName(dto.name || '');
+      const name = this.relFromOriginalName(rawName);
       const emp = dto.employeeNumber ?? null;
 
       this.logStep(fn, 'normalized', { root, path, name, emp });
@@ -936,9 +955,14 @@ export class NovaS3Service {
     this.logCtx(fn, dto as any);
 
     try {
+      const rawNewName = (dto.newName ?? '').trim();
+      if (rawNewName.includes('/') || rawNewName.includes('\\')) {
+        throw new BadRequestException('Name cannot contain slashes');
+      }
+
       const root = this.normRoot(dto.root);
       const oldPath = this.normPath(dto.oldPath);
-      const newName = this.relFromOriginalName(dto.newName || '');
+      const newName = this.relFromOriginalName(rawNewName);
       const emp = dto.employeeNumber ?? null;
 
       this.logStep(fn, 'normalized', { root, oldPath, newName, emp });
@@ -957,6 +981,13 @@ export class NovaS3Service {
       const newPath = parent ? this.joinPath(parent, newName) : newName;
 
       this.logStep(fn, 'computed newPath', { parent, newPath });
+
+      const conflict = await this.repo.findOne({
+        where: { root, employeeNumber: emp, path: newPath } as any,
+      });
+      if (conflict) {
+        throw new ConflictException(`An item named "${newName}" already exists in the destination`);
+      }
 
       const baseFolder = this.s3BaseFolder(root, emp);
       this.logStep(fn, 's3 baseFolder', { baseFolder });
@@ -1023,6 +1054,13 @@ export class NovaS3Service {
 
       this.logStep(fn, 'computed newPath', { fileName, newPath });
 
+      const conflict = await this.repo.findOne({
+        where: { root, employeeNumber: emp, path: newPath } as any,
+      });
+      if (conflict) {
+        throw new ConflictException(`An item named "${fileName}" already exists in the destination`);
+      }
+
       const baseFolder = this.s3BaseFolder(root, emp);
       this.logStep(fn, 's3 baseFolder', { baseFolder });
 
@@ -1065,10 +1103,21 @@ export class NovaS3Service {
 
       this.logStep(fn, 'existing', { id: existing.id, path: existing.path });
 
+      if (targetPath === sourcePath || targetPath.startsWith(`${sourcePath}/`)) {
+        throw new BadRequestException('Cannot move a folder into itself');
+      }
+
       const folderName = this.nameOf(sourcePath);
       const newPrefix = targetPath ? this.joinPath(targetPath, folderName) : folderName;
 
       this.logStep(fn, 'computed newPrefix', { folderName, newPrefix });
+
+      const conflict = await this.repo.findOne({
+        where: { root, employeeNumber: emp, path: newPrefix } as any,
+      });
+      if (conflict) {
+        throw new ConflictException(`An item named "${folderName}" already exists in the destination`);
+      }
 
       await this.ensureFolderChain(root, this.parentOf(newPrefix), emp);
 
@@ -1117,20 +1166,35 @@ export class NovaS3Service {
       const baseFolder = this.s3BaseFolder(root, emp);
       this.logStep(fn, 's3 baseFolder', { baseFolder });
 
-      if (dto.kind === 'folder') {
-        const raw = await this.storage.deletePrefix(baseFolder, rel);
-        this.logStep(fn, 'storage raw (folder)', raw);
+      // ✅ La BD (existing.type) es la fuente de verdad, no dto.kind
+      if (dto.kind && dto.kind !== existing.type) {
+        this.logStep(fn, 'dto.kind mismatch -> using DB type', { dtoKind: dto.kind, dbType: existing.type });
+      }
 
-        const del = await this.repo.delete([
-          { root, employeeNumber: emp, path: rel } as any,
-          { root, employeeNumber: emp, path: Like(`${rel}/%`) } as any,
-        ]);
+      if (existing.type === 'folder') {
+        // ✅ Borrar en DB PRIMERO (source of truth), luego S3
+        const delExact = await this.repo.delete({ root, employeeNumber: emp, path: rel } as any);
+        const delChildren = await this.repo.delete({ root, employeeNumber: emp, path: Like(`${rel}/%`) } as any);
+        const affected = (delExact.affected ?? 0) + (delChildren.affected ?? 0);
 
-        this.logStep(fn, 'db delete (folder)', { affected: del.affected ?? 0 });
+        this.logStep(fn, 'db delete (folder)', { affected });
+
+        let raw: any;
+        try {
+          raw = await this.storage.deletePrefix(baseFolder, rel);
+          this.logStep(fn, 'storage raw (folder)', raw);
+        } catch (s3Err: any) {
+          this.logErr(fn, s3Err, {
+            baseFolder,
+            rel,
+            note: 'S3 deletePrefix failed AFTER DB delete — orphaned objects may remain in S3, manual cleanup required',
+          });
+          raw = { success: true, message: 'Deleted folder from DB, but S3 cleanup failed (see logs)' };
+        }
 
         return this.toOpResponse({
           ...raw,
-          deletedCount: del.affected ?? 0,
+          deletedCount: affected,
           message: raw?.message ?? 'Deleted folder',
         });
       }
@@ -1190,9 +1254,12 @@ export class NovaS3Service {
 
     const { Like: LikeOp } = await import('typeorm');
 
+    // Escapar comodines LIKE (% _ \) para que se busquen como literales
+    const escaped = q.replace(/[\\%_]/g, '\\$&');
+
     const results = await this.repo.find({
       where: [
-        { root, employeeNumber: emp, name: LikeOp(`%${q}%`) } as any,
+        { root, employeeNumber: emp, name: LikeOp(`%${escaped}%`) } as any,
       ],
       order: { type: 'ASC', name: 'ASC' } as any,
       take: limit,
@@ -1251,7 +1318,7 @@ export class NovaS3Service {
     const emp = dto.employeeNumber;
     const filename = this.relFromOriginalName(dto.filename);
     const relativePath = path ? `${path}/${filename}` : filename;
-    const expiresSeconds = dto.expiresSeconds ?? 3600;
+    const expiresSeconds = this.clampExpiry(dto.expiresSeconds, 3600);
 
     await this.ensureFolderChain(root, path, emp);
 
@@ -1286,7 +1353,7 @@ export class NovaS3Service {
     const emp = dto.employeeNumber;
     const multipartThreshold = dto.multipartThreshold ?? 100 * 1024 * 1024; // 100 MB
     const partSize = Math.max(dto.partSize ?? 10 * 1024 * 1024, 5 * 1024 * 1024); // min 5 MB (S3 requirement)
-    const urlExpires = dto.urlExpiresSeconds ?? 3600;
+    const urlExpires = this.clampExpiry(dto.urlExpiresSeconds, 3600);
 
     const folderCache = new Set<string>();
     const results: any[] = [];
@@ -1352,6 +1419,12 @@ export class NovaS3Service {
     const path = this.normPath(dto.path);
     const emp = dto.employeeNumber;
 
+    // ✅ Validar que s3Key corresponda al path declarado (anti-spoofing)
+    const expectedKey = this.buildTenantS3Key(root, emp, path, false);
+    if (dto.s3Key !== expectedKey) {
+      throw new BadRequestException('s3Key does not match expected path');
+    }
+
     const s3Parts = dto.parts.map((p) => ({ PartNumber: p.partNumber, ETag: p.etag }));
     const raw = await this.storage.completeMultipartUpload(dto.s3Key, dto.uploadId, s3Parts);
 
@@ -1399,6 +1472,12 @@ export class NovaS3Service {
     const path = this.normPath(dto.path);
     const emp = dto.employeeNumber;
 
+    // ✅ Validar que s3Key corresponda al path declarado (anti-spoofing)
+    const expectedKey = this.buildTenantS3Key(root, emp, path, false);
+    if (dto.s3Key !== expectedKey) {
+      throw new BadRequestException('s3Key does not match expected path');
+    }
+
     await this.ensureFolderChain(root, this.parentOf(path), emp);
 
     await this.repo.upsert(
@@ -1436,6 +1515,13 @@ export class NovaS3Service {
     const rows: Partial<NovaS3>[] = [];
     for (const item of dto.items) {
       const path = this.normPath(item.path);
+
+      // ✅ Validar que s3Key corresponda al path declarado (anti-spoofing)
+      const expectedKey = this.buildTenantS3Key(root, emp, path, false);
+      if (item.s3Key !== expectedKey) {
+        throw new BadRequestException('s3Key does not match expected path');
+      }
+
       await this.ensureFolderChainCached(root, this.parentOf(path), emp, folderCache);
 
       rows.push({
@@ -1476,7 +1562,7 @@ export class NovaS3Service {
     if (!row) throw new BadRequestException('File not found in DB');
 
     const baseFolder = this.s3BaseFolder(root, emp);
-    const exp = dto.expiresSeconds ?? 60 * 5;
+    const exp = this.clampExpiry(dto.expiresSeconds, 60 * 5);
 
     const signed = await this.storage.presignedGetUrl(baseFolder, rel, exp);
     if (!signed?.success || !signed?.url) {

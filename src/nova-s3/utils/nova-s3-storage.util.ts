@@ -14,6 +14,7 @@ import {
   S3Client,
   PutObjectCommand,
   DeleteObjectCommand,
+  DeleteObjectsCommand,
   CopyObjectCommand,
   ListObjectsV2Command,
   GetObjectCommand,
@@ -74,6 +75,14 @@ export class NovaS3StorageUtil {
     const f = this.norm(folder);
     const r = this.norm(relativePath);
     return r ? `${f}/${r}` : f;
+  }
+
+  /**
+   * CopySource requiere la key URL-encoded (los "/" se conservan).
+   * Evita errores con keys que contienen espacios, "+", "#", etc.
+   */
+  private encodeCopySource(key: string) {
+    return `${this.bucketName}/${encodeURIComponent(key).replace(/%2F/g, '/')}`;
   }
 
   // ---------------------------------------------------------------------------
@@ -205,7 +214,7 @@ export class NovaS3StorageUtil {
       await this.s3.send(
         new CopyObjectCommand({
           Bucket: this.bucketName,
-          CopySource: `${this.bucketName}/${oldKey}`,
+          CopySource: this.encodeCopySource(oldKey),
           Key: newKey,
         }),
       );
@@ -236,7 +245,7 @@ export class NovaS3StorageUtil {
       await this.s3.send(
         new CopyObjectCommand({
           Bucket: this.bucketName,
-          CopySource: `${this.bucketName}/${oldKey}`,
+          CopySource: this.encodeCopySource(oldKey),
           Key: newKey,
         }),
       );
@@ -315,23 +324,36 @@ export class NovaS3StorageUtil {
         await this.s3.send(
           new CopyObjectCommand({
             Bucket: this.bucketName,
-            CopySource: `${this.bucketName}/${obj.Key}`,
+            CopySource: this.encodeCopySource(obj.Key),
             Key: destKey,
           }),
         );
         copied++;
       }
 
-      // Borrar originales
+      // Borrar originales (batch DeleteObjects, máx 1000 keys por request)
       let deleted = 0;
-      for (const obj of allObjects) {
-        if (!obj.Key) continue;
-        try {
-          await this.s3.send(new DeleteObjectCommand({ Bucket: this.bucketName, Key: obj.Key }));
-          deleted++;
-        } catch (e) {
-          console.warn('Warning deleting original key:', obj.Key, e);
+      const keysToDelete = allObjects
+        .filter((obj) => obj.Key)
+        .map((obj) => ({ Key: obj.Key! }));
+
+      for (let i = 0; i < keysToDelete.length; i += 1000) {
+        const batch = keysToDelete.slice(i, i + 1000);
+        const res = await this.s3.send(
+          new DeleteObjectsCommand({
+            Bucket: this.bucketName,
+            Delete: { Objects: batch, Quiet: true },
+          }),
+        );
+
+        if (res.Errors?.length) {
+          console.error('S3 movePrefix delete errors:', res.Errors);
+          throw new InternalServerErrorException(
+            `Failed to delete ${res.Errors.length} original object(s) after copy in S3 (movePrefix)`,
+          );
         }
+
+        deleted += batch.length;
       }
 
       return {
@@ -345,6 +367,7 @@ export class NovaS3StorageUtil {
       };
     } catch (error) {
       console.error('S3 movePrefix error:', error);
+      if (error instanceof InternalServerErrorException) throw error;
       throw new InternalServerErrorException('Failed to move folder/prefix in S3');
     }
   }
