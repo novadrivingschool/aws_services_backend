@@ -54,3 +54,6 @@ pids
 
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# Descartes: en este entorno no se pueden borrar ficheros, se aparcan aqui
+_to_delete/
