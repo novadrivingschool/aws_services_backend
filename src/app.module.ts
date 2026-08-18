@@ -10,6 +10,7 @@ import { CrmS3Module } from './crm-s3/crm-s3.module';
 import { HelpdeskFilesModule } from './helpdesk-files/helpdesk-files.module';
 import { NovanaFilesModule } from './novana-files/novana-files.module';
 import { LoaFilesModule } from './loa-files/loa-files.module';
+import { HrWhatsappFilesModule } from './hr-whatsapp-files/hr-whatsapp-files.module';
 
 
 dotenv.config();
@@ -41,6 +42,7 @@ dotenv.config();
     HelpdeskFilesModule,
     NovanaFilesModule,
     LoaFilesModule,
+    HrWhatsappFilesModule,
   ],
 })
 export class AppModule { }
