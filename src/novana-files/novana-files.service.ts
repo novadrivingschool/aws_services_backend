@@ -285,7 +285,7 @@ export class NovanaFilesService {
   /**
    * Único punto de estrangulamiento de lectura/borrado.
    *
-   * Sin `taskUuid`: solo exige que `key` encaje en una de las cuatro formas
+   * Sin `taskUuid`: solo exige que `key` encaje en una de las formas
    * legales de NOVANA (impide traversal y lecturas fuera de este módulo).
    * Comprobar que el adjunto es de verdad del registro que lo pide —es decir,
    * que esa clave está en la lista de adjuntos guardados de ESE registro— es

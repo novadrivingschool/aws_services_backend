@@ -4,10 +4,10 @@
  *
  * Reglas, todas del lado del servidor:
  *   1. El cliente NUNCA elige la clave. Manda el uuid del ámbito (tarea,
- *      proyecto o borrador); el servidor construye
+ *      subtarea, proyecto o borrador); el servidor construye
  *      `novana/<plural>/<uuid>/<comments|files>/<aleatorio>.<ext>`.
  *   2. Toda clave que vuelva (URL firmada, borrado) tiene que encajar EXACTO
- *      en una de las cuatro formas legales (`LEGAL_KEY_RE`, más abajo). Eso
+ *      en una de las formas legales (`LEGAL_KEY_RE`, más abajo). Eso
  *      impide leer o borrar objetos ajenos del bucket compartido, y cierra el
  *      path traversal: ni `scopeId` ni `taskUuid` se concatenan crudos en una
  *      ruta sin pasar antes por este regex — un `scopeId` del estilo
@@ -29,8 +29,12 @@ import {
   FILES_SUBFOLDER,
   NOVANA_S3_ROOT,
   PROJECTS_SUBFOLDER,
+  ScopeArea,
   ScopeKind,
+  SCOPE_KINDS,
+  SCOPE_KIND_AREAS,
   SCOPE_KIND_TO_PLURAL,
+  SUBTASKS_SUBFOLDER,
   TASKS_SUBFOLDER,
 } from '../novana-files.constants';
 
@@ -52,40 +56,66 @@ const EXTENSION_ALTERNATION = ALLOWED_EXTENSIONS.map(escapeExtForRegex).join('|'
 const FILENAME_SRC = `${UUID_SRC}(?:${EXTENSION_ALTERNATION})`;
 
 /**
- * Las CUATRO formas legales de clave, y ninguna otra, como un único regex
- * anclado (`^...$`, sin flag `m`: `$` exige el final real de la cadena, no
- * admite un `\n` colgando al final). Sin comodines `.*` en ningún tramo — es
- * una lista blanca cerrada de principio a fin — así que `..`, `\`, bytes de
- * control o un sufijo `/../../otro.png` no tienen forma de colarse: o la
- * cadena encaja letra a letra en este patrón, o se rechaza entera.
+ * Un tramo `<plural>/<uuid>/(?:área1|área2)` (o `<plural>/<uuid>/área-única`
+ * si el scopeKind solo admite una) por cada `scopeKind`, construido a partir
+ * de `SCOPE_KIND_TO_PLURAL` + `SCOPE_KIND_AREAS` — las MISMAS constantes que
+ * `novana-files.constants.ts` usa para `describePolicy()`. Generarlo así, en
+ * vez de cablear un branch por scopeKind, es lo que permite que
+ * `SCOPE_KIND_AREAS` sea la única fuente de verdad de qué área es legal bajo
+ * qué scopeKind: si se añade un scopeKind, o a uno existente se le
+ * añade/quita un área, este regex lo sigue automáticamente sin tocar una
+ * línea de este archivo. `comments` sigue sin ser alcanzable bajo `project`
+ * ni bajo `draft` porque `SCOPE_KIND_AREAS` no lo lista para ellos — no por
+ * un caso especial aquí; el porqué (un proyecto no tiene hilo de
+ * comentarios, un borrador no tiene registro todavía) está documentado junto
+ * a esa constante, en `novana-files.constants.ts`.
  *
- * `comments/` solo puede darse bajo `tasks/`: ni proyectos ni borradores
- * tienen comentarios hoy, así que esa rama no existe para ellos.
+ * Ninguno de los valores que entran aquí (subcarpetas, áreas) tiene
+ * caracteres de regex — son todo palabras ascii en minúscula fijadas en
+ * `novana-files.constants.ts` — así que no hace falta escaparlos.
+ */
+const SCOPE_KIND_KEY_ALTERNATION = SCOPE_KINDS.map((scopeKind) => {
+  const plural = SCOPE_KIND_TO_PLURAL[scopeKind];
+  const areas = SCOPE_KIND_AREAS[scopeKind];
+  const areaSrc = areas.length === 1 ? areas[0] : `(?:${areas.join('|')})`;
+  return `${plural}/${UUID_SRC}/${areaSrc}`;
+}).join('|');
+
+/**
+ * Las formas legales de clave, y ninguna otra, como un único regex anclado
+ * (`^...$`, sin flag `m`: `$` exige el final real de la cadena, no admite un
+ * `\n` colgando al final). Sin comodines `.*` en ningún tramo — es una lista
+ * blanca cerrada de principio a fin, armada arriba a partir de
+ * `SCOPE_KIND_KEY_ALTERNATION` — así que `..`, `\`, bytes de control o un
+ * sufijo `/../../otro.png` no tienen forma de colarse: o la cadena encaja
+ * letra a letra en este patrón, o se rechaza entera.
  */
 const LEGAL_KEY_RE = new RegExp(
-  '^' +
-    `${NOVANA_S3_ROOT}/(?:` +
-    `${TASKS_SUBFOLDER}/${UUID_SRC}/(?:${COMMENT_SUBFOLDER}|${FILES_SUBFOLDER})` +
-    `|${PROJECTS_SUBFOLDER}/${UUID_SRC}/${FILES_SUBFOLDER}` +
-    `|${DRAFTS_SUBFOLDER}/${UUID_SRC}/${FILES_SUBFOLDER}` +
-    `)/${FILENAME_SRC}$`,
+  '^' + `${NOVANA_S3_ROOT}/(?:${SCOPE_KIND_KEY_ALTERNATION})/${FILENAME_SRC}$`,
 );
 
 /**
  * Inverso de `SCOPE_KIND_TO_PLURAL`, para reconstruir el `scopeKind` a partir
- * de una clave. Tabla escrita a mano (son 3 entradas) en vez de derivada por
+ * de una clave. Tabla escrita a mano (son 4 entradas) en vez de derivada por
  * `Object.entries` para no depender de que TypeScript infiera bien los tipos
  * literales al invertir un `Record` — más simple, y sigue ligada a las mismas
  * constantes de subcarpeta que `SCOPE_KIND_TO_PLURAL`.
  */
 const PLURAL_TO_SCOPE_KIND: Record<string, ScopeKind> = {
   [TASKS_SUBFOLDER]: 'task',
+  [SUBTASKS_SUBFOLDER]: 'subtask',
   [PROJECTS_SUBFOLDER]: 'project',
   [DRAFTS_SUBFOLDER]: 'draft',
 };
 
-/** 'comments' (legado, solo bajo `task`) o 'files' (adjuntos del propio registro). */
-export type NovanaKeyArea = typeof COMMENT_SUBFOLDER | typeof FILES_SUBFOLDER;
+/**
+ * 'comments' (adjunto del hilo, solo bajo `task`/`subtask`) o 'files'
+ * (adjunto del propio registro). Alias de `ScopeArea`
+ * (`novana-files.constants.ts`) — mismo valor, nombre propio de este módulo
+ * porque aquí describe el papel dentro de una clave ya partida, no el campo
+ * suelto que manda el cliente.
+ */
+export type NovanaKeyArea = ScopeArea;
 
 /** Las partes con las que se construye — o en las que se descompone — una clave de NOVANA. */
 export interface NovanaKeyParts {
@@ -96,8 +126,8 @@ export interface NovanaKeyParts {
 }
 
 /**
- * Descompone una clave si (y solo si) encaja en una de las cuatro formas
- * legales. `null` en cualquier otro caso: traversal, extensión no permitida,
+ * Descompone una clave si (y solo si) encaja en una de las formas legales
+ * (`LEGAL_KEY_RE`). `null` en cualquier otro caso: traversal, extensión no permitida,
  * ámbito desconocido, uuid mal formado, barra invertida de Windows, clave
  * vacía o demasiado larga, etc.
  */
@@ -117,7 +147,7 @@ export function parseNovanaKey(key: unknown): NovanaKeyParts | null {
   return { scopeKind, scopeId: scopeId.toLowerCase(), area: area as NovanaKeyArea };
 }
 
-/** True cuando `key` es una clave de NOVANA bien formada, en cualquiera de los cuatro ámbitos. */
+/** True cuando `key` es una clave de NOVANA bien formada, en cualquiera de los ámbitos admitidos. */
 export function isLegalNovanaKey(key: unknown): key is string {
   return parseNovanaKey(key) !== null;
 }
@@ -152,14 +182,28 @@ export function buildObjectKey(parts: NovanaKeyParts, detectedMime: AllowedMimeT
  * ellos) al `NovanaKeyParts` con el que construir la clave, o al mensaje de
  * error si la combinación no vale.
  *
- * Es el ÚNICO sitio que conoce la regla de negocio "scopeKind y scopeId van
- * juntos, o no va ninguno de los dos; sin ellos hace falta taskUuid" — así el
- * controller no la repite ni puede desincronizarse de `parseNovanaKey`.
+ * Es el ÚNICO sitio que conoce las reglas de negocio de combinación de
+ * campos, para que el controller no las repita ni pueda desincronizarse de
+ * `parseNovanaKey`:
+ *   - "scopeKind y scopeId van juntos, o no va ninguno de los dos; sin ellos
+ *     hace falta taskUuid" (regla de siempre, sin cambios).
+ *   - "scopeArea es opcional; si no llega, el área es 'files' cuando hay
+ *     scopeKind+scopeId (o 'comments' fija en el modo legado de taskUuid,
+ *     como siempre)". Así, un cliente que nunca ha oído hablar de
+ *     `scopeArea` — el frontend de comentarios de tarea ya en producción,
+ *     que solo manda `taskUuid` — se comporta BYTE A BYTE igual que antes de
+ *     que este campo existiera.
+ *   - "scopeArea solo puede pedir un área que `SCOPE_KIND_AREAS` permita para
+ *     ESE scopeKind" — hoy, 'comments' vale para 'task'/'subtask' pero no
+ *     para 'project'/'draft'. Se compara contra `SCOPE_KIND_AREAS` (no una
+ *     lista aparte) para que esta función nunca pueda aceptar una
+ *     combinación que el regex de `parseNovanaKey` luego rechace, o viceversa.
  */
 export function resolveUploadTarget(input: {
   taskUuid?: string;
   scopeKind?: ScopeKind;
   scopeId?: string;
+  scopeArea?: ScopeArea;
 }): { ok: true; parts: NovanaKeyParts } | { ok: false; message: string } {
   const hasScopeKind = input.scopeKind !== undefined;
   const hasScopeId = input.scopeId !== undefined;
@@ -169,15 +213,24 @@ export function resolveUploadTarget(input: {
   }
 
   if (hasScopeKind && hasScopeId) {
+    const scopeKind = input.scopeKind as ScopeKind;
+    // Sin `scopeArea`, el área es la de siempre: `files/` (adjunto del propio
+    // registro). `scopeArea` solo lo manda un cliente que explícitamente pide
+    // el hilo de comentarios de una tarea/subtarea — el flujo legado de
+    // taskUuid, más abajo, ni siquiera pasa por esta rama.
+    const area = input.scopeArea ?? FILES_SUBFOLDER;
+
+    if (!SCOPE_KIND_AREAS[scopeKind].includes(area)) {
+      return {
+        ok: false,
+        message:
+          `scopeArea "${area}" is not allowed for scopeKind "${scopeKind}". ` +
+          `Allowed areas for "${scopeKind}": ${SCOPE_KIND_AREAS[scopeKind].join(', ')}.`,
+      };
+    }
+
     // taskUuid, si también llegó, se ignora a propósito: scopeKind/scopeId ganan.
-    return {
-      ok: true,
-      parts: {
-        scopeKind: input.scopeKind as ScopeKind,
-        scopeId: input.scopeId as string,
-        area: FILES_SUBFOLDER,
-      },
-    };
+    return { ok: true, parts: { scopeKind, scopeId: input.scopeId as string, area } };
   }
 
   if (!input.taskUuid) {

@@ -4,7 +4,7 @@ import { IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 /**
  * Parámetros para leer o borrar un adjunto existente.
  *
- * `key` es obligatoria y se valida contra las cuatro formas legales de clave
+ * `key` es obligatoria y se valida contra las formas legales de clave
  * (`isLegalNovanaKey`, en `utils/novana-key.util.ts`) — eso es lo único que
  * garantiza que la clave es de NOVANA y no un intento de path traversal o de
  * leer/borrar algo fuera de este módulo.

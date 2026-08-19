@@ -90,38 +90,80 @@ export const NOVANA_S3_ROOT = 'novana';
 /**
  * Subcarpetas de cada ámbito ("scope") de adjunto.
  *
- * `comments` es EXCLUSIVO de `tasks`: solo las tareas tienen comentarios hoy.
- * `files` es el ámbito nuevo — adjuntos del PROPIO registro (tarea, proyecto
- * o borrador), no de sus comentarios — y existe para los tres plurales.
+ * `files` es el ámbito de adjuntos del PROPIO registro (tarea, subtarea,
+ * proyecto o borrador) y existe para los cuatro plurales.
+ *
+ * `comments` es el ámbito del HILO de comentarios de un registro. Legal solo
+ * bajo `tasks` y `subtasks` — las únicas dos cosas que tienen hilo de
+ * comentarios en NOVANA hoy — y nunca bajo `projects` ni `drafts`:
+ *   - un proyecto no tiene hilo de comentarios, solo adjuntos del registro;
+ *   - un borrador es la sesión de creación ANTES de que el registro exista,
+ *     así que no puede haber comentarios sobre algo que aún no se ha creado.
+ * `SCOPE_KIND_AREAS`, más abajo, es la única fuente de verdad de esta regla.
  *
  * `as const` en las dos últimas: sus tipos literales ('comments' / 'files')
- * son los que arman `NovanaKeyArea` en `utils/novana-key.util.ts`, para que
- * ese tipo no pueda desincronizarse del valor real escrito en S3.
+ * son los que arman `ScopeArea`, justo debajo.
  */
 export const TASKS_SUBFOLDER = 'tasks';
+export const SUBTASKS_SUBFOLDER = 'subtasks';
 export const PROJECTS_SUBFOLDER = 'projects';
 export const DRAFTS_SUBFOLDER = 'drafts';
 export const COMMENT_SUBFOLDER = 'comments' as const;
 export const FILES_SUBFOLDER = 'files' as const;
 
 /**
- * Los tres ámbitos ("scopeKind") que puede declarar el cliente al subir un
- * adjunto del PROPIO registro. Lista cerrada: cualquier otro valor se
- * rechaza antes de tocar ninguna ruta.
+ * Las dos áreas legales dentro de cualquier scopeKind. Lista cerrada para el
+ * campo `scopeArea` del multipart de subida (`dto/upload-novana-file.dto.ts`)
+ * — igual que `SCOPE_KINDS`, cualquier valor fuera de ella se rechaza en el
+ * DTO antes de tocar una ruta. Qué scopeKind admite cuál área es otra
+ * pregunta, que responde `SCOPE_KIND_AREAS`, no esta lista.
+ */
+export const SCOPE_AREAS = [FILES_SUBFOLDER, COMMENT_SUBFOLDER] as const;
+export type ScopeArea = (typeof SCOPE_AREAS)[number];
+
+/**
+ * Los cuatro ámbitos ("scopeKind") que puede declarar el cliente al subir un
+ * adjunto del PROPIO registro, o de su hilo de comentarios combinado con
+ * `scopeArea: 'comments'` (ver `SCOPE_KIND_AREAS`, más abajo). Lista cerrada:
+ * cualquier otro valor se rechaza antes de tocar ninguna ruta.
  *
  * `draft` existe porque en NOVANA se pueden adjuntar archivos en el diálogo
  * de creación de tarea/proyecto, ANTES de que el registro exista — no hay
  * `taskUuid`/`projectUuid` todavía, solo un uuid generado en el cliente para
  * la sesión de creación.
+ *
+ * `subtask` existe porque las subtareas tienen comentarios y adjuntos propios
+ * igual que las tareas.
  */
-export const SCOPE_KINDS = ['task', 'project', 'draft'] as const;
+export const SCOPE_KINDS = ['task', 'subtask', 'project', 'draft'] as const;
 export type ScopeKind = (typeof SCOPE_KINDS)[number];
 
 /** `scopeKind` (como lo manda el cliente, singular) -> segmento plural de la clave S3. */
 export const SCOPE_KIND_TO_PLURAL: Record<ScopeKind, string> = {
   task: TASKS_SUBFOLDER,
+  subtask: SUBTASKS_SUBFOLDER,
   project: PROJECTS_SUBFOLDER,
   draft: DRAFTS_SUBFOLDER,
+};
+
+/**
+ * Para cada `scopeKind`, las áreas que son legales bajo él. Única fuente de
+ * verdad de la regla "`comments` solo bajo `task`/`subtask`": la lee tanto el
+ * regex de clave (`LEGAL_KEY_RE`, en `utils/novana-key.util.ts`) como la
+ * validación de `scopeArea` en la subida (`resolveUploadTarget`, mismo
+ * archivo) — así que basta cambiarla aquí para mantener a los dos en sync, y
+ * nunca hace falta tocar el regex a mano para añadir o quitar un área.
+ *
+ * `project` y `draft` solo admiten `files`: un proyecto no tiene hilo de
+ * comentarios en NOVANA (solo adjuntos del propio registro), y un borrador es
+ * la sesión de creación ANTES de que el registro exista — no puede haber
+ * comentarios sobre algo que todavía no se ha creado.
+ */
+export const SCOPE_KIND_AREAS: Record<ScopeKind, readonly ScopeArea[]> = {
+  task: [COMMENT_SUBFOLDER, FILES_SUBFOLDER],
+  subtask: [COMMENT_SUBFOLDER, FILES_SUBFOLDER],
+  project: [FILES_SUBFOLDER],
+  draft: [FILES_SUBFOLDER],
 };
 
 /** Máximo de adjuntos por comentario (replicado en el frontend). */
@@ -148,7 +190,7 @@ export const INLINE_SAFE_MIME_TYPES: readonly string[] = [
 const mb = (bytes: number) => Math.round(bytes / (1024 * 1024));
 
 /**
- * Las cuatro formas de clave legales, en formato legible para humanos y UI.
+ * Las seis formas de clave legales, en formato legible para humanos y UI.
  * `utils/novana-key.util.ts` valida las claves reales con un regex construido
  * a partir de las MISMAS constantes que arman estas plantillas — esto es solo
  * la versión para mostrar, nunca se usa para validar nada.
@@ -156,6 +198,8 @@ const mb = (bytes: number) => Math.round(bytes / (1024 * 1024));
 export const NOVANA_KEY_SHAPES = [
   `${NOVANA_S3_ROOT}/${TASKS_SUBFOLDER}/<uuid>/${COMMENT_SUBFOLDER}/<uuid>.<ext>`,
   `${NOVANA_S3_ROOT}/${TASKS_SUBFOLDER}/<uuid>/${FILES_SUBFOLDER}/<uuid>.<ext>`,
+  `${NOVANA_S3_ROOT}/${SUBTASKS_SUBFOLDER}/<uuid>/${COMMENT_SUBFOLDER}/<uuid>.<ext>`,
+  `${NOVANA_S3_ROOT}/${SUBTASKS_SUBFOLDER}/<uuid>/${FILES_SUBFOLDER}/<uuid>.<ext>`,
   `${NOVANA_S3_ROOT}/${PROJECTS_SUBFOLDER}/<uuid>/${FILES_SUBFOLDER}/<uuid>.<ext>`,
   `${NOVANA_S3_ROOT}/${DRAFTS_SUBFOLDER}/<uuid>/${FILES_SUBFOLDER}/<uuid>.<ext>`,
 ] as const;
@@ -180,6 +224,13 @@ export function describePolicy() {
     // las claves: los lee de aquí, la misma fuente que usa el validador.
     scopeKinds: [...SCOPE_KINDS],
     keyShapes: [...NOVANA_KEY_SHAPES],
+    // Áreas admitidas: la lista cerrada de valores de `scopeArea`, y qué
+    // scopeKind admite cuál — así el frontend sabe, por ejemplo, que
+    // 'comments' no es una opción para 'project' sin tener que intentarlo.
+    scopeAreas: [...SCOPE_AREAS],
+    scopeKindAreas: Object.fromEntries(
+      SCOPE_KINDS.map((scopeKind) => [scopeKind, [...SCOPE_KIND_AREAS[scopeKind]]]),
+    ) as Record<ScopeKind, ScopeArea[]>,
   };
 }
 

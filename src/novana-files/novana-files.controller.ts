@@ -47,7 +47,7 @@ export class NovanaFilesController {
    * sola fuente de verdad en vez de duplicarlos a mano en el frontend.
    */
   @Get('policy')
-  @ApiOperation({ summary: 'Allowed file types, size limits, scope kinds and key shapes' })
+  @ApiOperation({ summary: 'Allowed file types, size limits, scope kinds/areas and key shapes' })
   getPolicy() {
     return { success: true, policy: describePolicy() };
   }
@@ -55,8 +55,9 @@ export class NovanaFilesController {
   @Post('upload')
   @ApiOperation({
     summary:
-      'Upload one attachment: either for a task comment (taskUuid) or for the record itself ' +
-      '(scopeKind + scopeId: task, project or draft)',
+      'Upload one attachment: either for a task comment (taskUuid, legacy) or for the record ' +
+      'itself (scopeKind + scopeId: task, subtask, project or draft), optionally targeting its ' +
+      "comment thread with scopeArea='comments' (task/subtask only)",
   })
   @ApiResponse({ status: 201, description: 'Stored; returns the S3 key' })
   @ApiResponse({ status: 400, description: 'Disallowed/malformed file, or malformed scope fields' })
@@ -81,6 +82,7 @@ export class NovanaFilesController {
       taskUuid: dto.taskUuid,
       scopeKind: dto.scopeKind,
       scopeId: dto.scopeId,
+      scopeArea: dto.scopeArea,
     });
     if (!resolved.ok) {
       throw new BadRequestException(resolved.message);
@@ -97,7 +99,9 @@ export class NovanaFilesController {
   }
 
   @Delete()
-  @ApiOperation({ summary: 'Delete an attachment (task comment, task, project or draft)' })
+  @ApiOperation({
+    summary: 'Delete an attachment (task/subtask comment, task, subtask, project or draft)',
+  })
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   remove(@Query() query: NovanaFileKeyDto) {
     return this.service.remove(query.key, query.taskUuid);
@@ -113,6 +117,7 @@ export class NovanaFilesController {
         uploadedBy: body?.uploadedBy,
         scopeKind: body?.scopeKind,
         scopeId: body?.scopeId,
+        scopeArea: body?.scopeArea,
       },
       { type: 'body', metatype: UploadNovanaFileDto },
     )) as UploadNovanaFileDto;

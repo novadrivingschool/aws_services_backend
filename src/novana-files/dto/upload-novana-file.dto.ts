@@ -1,7 +1,7 @@
 /* src/novana-files/dto/upload-novana-file.dto.ts */
 import { IsIn, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
-import { SCOPE_KINDS, ScopeKind } from '../novana-files.constants';
+import { SCOPE_AREAS, SCOPE_KINDS, ScopeArea, ScopeKind } from '../novana-files.constants';
 
 /**
  * Campos multipart que acompañan al archivo.
@@ -30,21 +30,42 @@ export class UploadNovanaFileDto {
   taskUuid?: string;
 
   /**
-   * Ámbito del PROPIO registro al que se adjunta el archivo (no un
-   * comentario). Lista cerrada — un valor fuera de ella nunca llega a
-   * construir una ruta, se rechaza en la validación del DTO.
+   * Ámbito al que se adjunta el archivo: el PROPIO registro (tarea, subtarea,
+   * proyecto o borrador) o, combinado con `scopeArea: 'comments'`, el hilo de
+   * comentarios de ese registro (solo task/subtask — ver `scopeArea`, abajo).
+   * Lista cerrada — un valor fuera de ella nunca llega a construir una ruta,
+   * se rechaza en la validación del DTO.
    */
   @IsOptional()
   @IsIn(SCOPE_KINDS)
   scopeKind?: ScopeKind;
 
   /**
-   * uuid del registro (tarea/proyecto) o de la sesión de creación (borrador).
-   * v4 porque así los genera siempre el cliente que abre el diálogo de alta.
+   * uuid del registro (tarea/subtarea/proyecto) o de la sesión de creación
+   * (borrador). v4 porque así los genera siempre el cliente que abre el
+   * diálogo de alta.
    */
   @IsOptional()
   @IsUUID('4')
   scopeId?: string;
+
+  /**
+   * Área dentro de `scopeKind`: `'files'` (adjunto del propio registro) o
+   * `'comments'` (adjunto de su hilo). OPCIONAL — por defecto `'files'`, así
+   * que un cliente que nunca manda este campo (todo el mundo hoy, incluido el
+   * frontend de comentarios de tarea en producción, que usa el modo legado de
+   * `taskUuid` y ni siquiera pasa por esta rama) se comporta exactamente
+   * igual que antes de que existiera.
+   *
+   * Solo tiene efecto junto a `scopeKind`+`scopeId`. La combinación concreta
+   * — `'comments'` únicamente vale con `scopeKind` `task` o `subtask` — la
+   * valida `resolveUploadTarget` (`utils/novana-key.util.ts`) contra
+   * `SCOPE_KIND_AREAS`, no este DTO: aquí solo se comprueba que el VALOR es
+   * uno de los dos legales.
+   */
+  @IsOptional()
+  @IsIn(SCOPE_AREAS)
+  scopeArea?: ScopeArea;
 
   /** Número de empleado, para los metadatos de S3 y el log. Solo auditoría. */
   @IsOptional()
