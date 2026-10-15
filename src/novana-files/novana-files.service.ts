@@ -19,6 +19,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import {
   DeleteObjectCommand,
+  DeleteObjectsCommand,
   GetObjectCommand,
   HeadObjectCommand,
   PutObjectCommand,
@@ -278,6 +279,45 @@ export class NovanaFilesService {
 
     this.logger.log(`Deleted ${key} by ${actor}`);
     return { success: true };
+  }
+
+  /**
+   * Borra varias claves en UNA llamada a S3 y falla si alguna no se pudo borrar.
+   *
+   * Todas las claves se validan ANTES de tocar el bucket: una sola ilegal
+   * rechaza el lote entero (400) y no se borra nada. Una clave que ya no existe
+   * NO es error — S3 responde éxito para ella — porque quien llama necesita
+   * poder reintentar tras un fallo parcial.
+   */
+  async removeMany(keys: string[], actor = 'unknown'): Promise<{ success: true; deleted: number }> {
+    const unique = [...new Set(keys)];
+    unique.forEach((key) => this.assertAccessible(key));
+
+    let errors: { Key?: string; Code?: string; Message?: string }[] = [];
+    try {
+      const result = await this.s3.send(
+        new DeleteObjectsCommand({
+          Bucket: this.bucket,
+          Delete: { Objects: unique.map((Key) => ({ Key })), Quiet: true },
+        }),
+      );
+      errors = result.Errors ?? [];
+    } catch (err) {
+      this.logger.error(
+        `Batch DELETE failed (${unique.length} keys): ${err instanceof Error ? err.message : err}`,
+      );
+      throw new InternalServerErrorException('Failed to delete the attachments');
+    }
+
+    if (errors.length) {
+      this.logger.error(
+        `Batch DELETE partially failed: ${errors.map((e) => `${e.Key}=${e.Code}`).join(', ')}`,
+      );
+      throw new InternalServerErrorException('Failed to delete some of the attachments');
+    }
+
+    this.logger.log(`Deleted ${unique.length} object(s) by ${actor}`);
+    return { success: true, deleted: unique.length };
   }
 
   // ─── Internos ────────────────────────────────────────────────────────────

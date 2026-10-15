@@ -17,6 +17,7 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
   Post,
   Query,
   UploadedFile,
@@ -33,6 +34,7 @@ import { novanaMulterOptions } from './novana-multer.config';
 import { describePolicy } from './novana-files.constants';
 import { UploadNovanaFileDto } from './dto/upload-novana-file.dto';
 import { NovanaFileKeyDto } from './dto/novana-file-key.dto';
+import { NovanaFileKeysDto } from './dto/novana-file-keys.dto';
 import { NovanaUploadExceptionFilter } from './filters/upload-exception.filter';
 import { resolveUploadTarget } from './utils/novana-key.util';
 
@@ -105,6 +107,19 @@ export class NovanaFilesController {
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   remove(@Query() query: NovanaFileKeyDto) {
     return this.service.remove(query.key, query.taskUuid);
+  }
+
+  /**
+   * Borrado por lote, todo o error: si S3 no pudo borrar alguna clave responde
+   * 500 y quien llama (it_backend, dentro de una transacción) deshace su
+   * operación. Ver `NovanaFilesService.removeMany`.
+   */
+  @Post('delete-batch')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Delete several attachments at once (all keys validated first)' })
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+  removeMany(@Body() body: NovanaFileKeysDto) {
+    return this.service.removeMany(body.keys);
   }
 
   // ─── Internos ────────────────────────────────────────────────────────────
